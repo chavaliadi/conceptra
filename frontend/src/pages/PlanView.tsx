@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { getPlan } from '../api/client'
 import ConceptPanel from '../components/ConceptPanel'
+import ConceptGraph from '../components/ConceptGraph'
 import PlanHeader from '../components/PlanHeader'
 import type { Concept, ConceptStatus, Plan } from '../types'
 
@@ -62,7 +63,7 @@ export default function PlanView() {
   const [error, setError] = useState<string | null>(null)
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null)
   const [statuses, setStatuses] = useState<Record<string, ConceptStatus>>({})
-  
+
   // Custom interactive layout modes
   const [viewMode, setViewMode] = useState<'map' | 'calendar'>('map')
   const [replanning, setReplanning] = useState(false)
@@ -107,11 +108,11 @@ export default function PlanView() {
   const weeksData = useMemo(() => {
     if (!plan) return []
     const groups: Record<number, { concept: Concept; day: number; priority: 'high' | 'medium' | 'low'; status: ConceptStatus }[]> = {}
-    
+
     plan.schedule.forEach((item) => {
       const concept = plan.graph.concepts.find((c) => c.id === item.concept_id)
       if (!concept) return
-      
+
       if (!groups[item.week]) {
         groups[item.week] = []
       }
@@ -122,7 +123,7 @@ export default function PlanView() {
         status: statuses[concept.id] ?? 'untouched',
       })
     })
-    
+
     return Object.keys(groups)
       .map(Number)
       .sort((a, b) => a - b)
@@ -148,11 +149,11 @@ export default function PlanView() {
   function triggerReplan() {
     if (!plan) return
     setReplanning(true)
-    
+
     setTimeout(() => {
       setReplanning(false)
       setReplanSuccess(true)
-      
+
       // Perform mock AI schedule redistribution by changing priority and shifting order
       const updatedSchedule = plan.schedule.map((item) => {
         if (statuses[item.concept_id] === 'struggling') {
@@ -161,7 +162,7 @@ export default function PlanView() {
         }
         return item
       })
-      
+
       setPlan({
         ...plan,
         schedule: updatedSchedule,
@@ -182,8 +183,8 @@ export default function PlanView() {
         <p className="text-rose-400 text-lg">
           {error ?? 'Plan not found. It may have expired after a server restart.'}
         </p>
-        <a 
-          href="/" 
+        <a
+          href="/"
           className="mt-4 inline-block text-sm text-violet-400 hover:text-violet-300 underline"
         >
           Return to home
@@ -232,21 +233,19 @@ export default function PlanView() {
         <div className="flex gap-1 rounded-xl bg-slate-900 border border-slate-800 p-1">
           <button
             onClick={() => setViewMode('map')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition duration-200 ${
-              viewMode === 'map' 
-                ? 'bg-violet-600 text-white shadow' 
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition duration-200 ${viewMode === 'map'
+              ? 'bg-violet-600 text-white shadow'
+              : 'text-slate-400 hover:text-slate-200'
+              }`}
           >
             🗺️ Concept Map
           </button>
           <button
             onClick={() => setViewMode('calendar')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition duration-200 ${
-              viewMode === 'calendar' 
-                ? 'bg-violet-600 text-white shadow' 
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
+            className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition duration-200 ${viewMode === 'calendar'
+              ? 'bg-violet-600 text-white shadow'
+              : 'text-slate-400 hover:text-slate-200'
+              }`}
           >
             📅 Study Calendar
           </button>
@@ -264,56 +263,12 @@ export default function PlanView() {
             <p className="text-sm text-slate-400">Complete prerequisites to unlock advanced concepts.</p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {plan.graph.concepts.map((concept) => {
-              const status = getStatus(concept.id)
-              const unlocked = isUnlocked(plan, concept.id, statuses)
-              const schedule = plan.schedule.find((item) => item.concept_id === concept.id)
-
-              return (
-                <button
-                  key={concept.id}
-                  type="button"
-                  disabled={!unlocked}
-                  onClick={() => setSelectedConcept(concept)}
-                  className={`rounded-2xl border p-5 text-left transition duration-200 relative group flex flex-col justify-between min-h-[160px] ${
-                    statusBorder[status]
-                  } ${
-                    unlocked 
-                      ? 'cursor-pointer hover:-translate-y-0.5' 
-                      : 'cursor-not-allowed opacity-40 bg-slate-950/20'
-                  }`}
-                >
-                  <div>
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <span className={`text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full ${statusBadge[status]}`}>
-                        {status}
-                      </span>
-                      {schedule && (
-                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-md ${priorityStyles[schedule.priority]}`}>
-                          W{schedule.week} D{schedule.day}
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="font-semibold text-white group-hover:text-violet-300 transition duration-150">
-                      {concept.name}
-                    </h3>
-                    <p className="mt-2 line-clamp-2 text-xs text-slate-400 leading-relaxed">
-                      {concept.description}
-                    </p>
-                  </div>
-                  
-                  <div className="mt-4 pt-3 border-t border-slate-800/40 flex justify-between items-center">
-                    <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
-                      {unlocked ? '🔓 Unlocked' : '🔒 Locked'}
-                    </span>
-                    {!unlocked && (
-                      <span className="text-[10px] text-rose-400 font-medium">Prereqs required</span>
-                    )}
-                  </div>
-                </button>
-              )
-            })}
+          <div className="h-[600px]">
+            <ConceptGraph
+              plan={plan}
+              statuses={statuses}
+              onSelectConcept={setSelectedConcept}
+            />
           </div>
         </div>
       )}
@@ -331,20 +286,19 @@ export default function PlanView() {
               <h3 className="text-lg font-bold text-violet-400 mb-4 pb-2 border-b border-slate-800">
                 Week {week}
               </h3>
-              
+
               <div className="grid gap-4 md:grid-cols-2">
                 {items.map(({ concept, day, priority, status }) => {
                   const unlocked = isUnlocked(plan, concept.id, statuses)
-                  
+
                   return (
-                    <div 
+                    <div
                       key={concept.id}
                       onClick={() => unlocked && setSelectedConcept(concept)}
-                      className={`flex flex-col justify-between p-4 rounded-xl border transition duration-200 ${
-                        unlocked 
-                          ? 'cursor-pointer hover:border-violet-500/50 bg-slate-950/60' 
-                          : 'opacity-40 bg-slate-950/20 border-slate-800 cursor-not-allowed'
-                      }`}
+                      className={`flex flex-col justify-between p-4 rounded-xl border transition duration-200 ${unlocked
+                        ? 'cursor-pointer hover:border-violet-500/50 bg-slate-950/60'
+                        : 'opacity-40 bg-slate-950/20 border-slate-800 cursor-not-allowed'
+                        }`}
                     >
                       <div>
                         <div className="flex items-center justify-between mb-2">

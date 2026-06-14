@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import type { FormEvent, DragEvent, ChangeEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createPlan } from '../api/client'
+import { createPlan, uploadSyllabus } from '../api/client'
 
 function defaultExamDate(): string {
   const date = new Date()
@@ -20,7 +20,7 @@ export default function Landing() {
   const navigate = useNavigate()
   const [inputMode, setInputMode] = useState<'topic' | 'pdf'>('topic')
   const [topic, setTopic] = useState('')
-  
+
   // PDF upload states
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [dragActive, setDragActive] = useState(false)
@@ -88,25 +88,28 @@ export default function Landing() {
         setError('Please upload a syllabus PDF first.')
         return
       }
-      // Extract file name without extension
-      finalTopic = pdfFile.name.replace(/\.[^/.]+$/, "")
-    }
-
-    if (!finalTopic) {
-      setError('Please provide a topic or upload a PDF.')
-      return
+    } else {
+      if (!finalTopic) {
+        setError('Please provide a topic.')
+        return
+      }
     }
 
     setLoading(true)
     setLoadingStep(0)
 
     try {
-      // Initiate API call in background immediately
-      const response = await createPlan({
-        topic: finalTopic,
-        exam_date: examDate,
-        hours_per_day: hoursPerDay,
-      })
+      // Initiate API call based on input mode
+      let response
+      if (inputMode === 'pdf' && pdfFile) {
+        response = await uploadSyllabus(pdfFile, examDate, hoursPerDay)
+      } else {
+        response = await createPlan({
+          topic: finalTopic,
+          exam_date: examDate,
+          hours_per_day: hoursPerDay,
+        })
+      }
 
       // Simulate visually premium sequential loading steps for Phase 1
       for (let step = 0; step < loadingSteps.length; step++) {
@@ -129,7 +132,7 @@ export default function Landing() {
         {/* Decorative ambient glowing backdrops */}
         <div className="absolute -top-40 -left-40 w-80 h-80 bg-violet-600/10 rounded-full blur-[100px]" />
         <div className="absolute -bottom-40 -right-40 w-80 h-80 bg-fuchsia-600/10 rounded-full blur-[100px]" />
-        
+
         {/* Loading ring */}
         <div className="relative flex items-center justify-center w-24 h-24 mb-8">
           <div className="absolute w-20 h-20 border-4 border-violet-500/20 rounded-full" />
@@ -144,15 +147,14 @@ export default function Landing() {
             {loadingSteps[loadingStep]}
           </p>
         </div>
-        
+
         {/* Dynamic step indicators */}
         <div className="flex gap-2.5 mt-8 w-full max-w-[200px] justify-center">
           {loadingSteps.map((_, i) => (
-            <div 
-              key={i} 
-              className={`h-1.5 rounded-full transition-all duration-500 ${
-                i <= loadingStep ? 'w-8 bg-violet-500' : 'w-2 bg-slate-800'
-              }`}
+            <div
+              key={i}
+              className={`h-1.5 rounded-full transition-all duration-500 ${i <= loadingStep ? 'w-8 bg-violet-500' : 'w-2 bg-slate-800'
+                }`}
             />
           ))}
         </div>
@@ -195,22 +197,20 @@ export default function Landing() {
             <button
               type="button"
               onClick={() => setInputMode('topic')}
-              className={`rounded-lg py-2 text-sm font-medium transition ${
-                inputMode === 'topic'
+              className={`rounded-lg py-2 text-sm font-medium transition ${inputMode === 'topic'
                   ? 'bg-slate-800 text-white shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
-              }`}
+                }`}
             >
               📝 Text Topic
             </button>
             <button
               type="button"
               onClick={() => setInputMode('pdf')}
-              className={`rounded-lg py-2 text-sm font-medium transition ${
-                inputMode === 'pdf'
+              className={`rounded-lg py-2 text-sm font-medium transition ${inputMode === 'pdf'
                   ? 'bg-slate-800 text-white shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
-              }`}
+                }`}
             >
               📁 Syllabus PDF
             </button>
@@ -238,7 +238,7 @@ export default function Landing() {
             <label className="mb-2 block text-sm font-medium text-slate-300">
               Upload Syllabus PDF
             </label>
-            
+
             <input
               type="file"
               ref={fileInputRef}
@@ -253,11 +253,10 @@ export default function Landing() {
               onDragOver={handleDrag}
               onDrop={handleDrop}
               onClick={triggerFileInput}
-              className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-6 cursor-pointer transition duration-300 ${
-                dragActive 
-                  ? 'border-violet-500 bg-violet-500/5' 
+              className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-6 cursor-pointer transition duration-300 ${dragActive
+                  ? 'border-violet-500 bg-violet-500/5'
                   : 'border-slate-800 hover:border-slate-700 bg-slate-950/50 hover:bg-slate-950/80'
-              }`}
+                }`}
             >
               {pdfFile ? (
                 <div className="flex items-center gap-3 w-full max-w-xs justify-between rounded-xl bg-slate-900 border border-slate-800 px-4 py-3">

@@ -29,6 +29,29 @@ export function createPlan(body: CreatePlanRequest): Promise<CreatePlanResponse>
   })
 }
 
+export async function uploadSyllabus(
+  file: File,
+  examDate: string,
+  hoursPerDay: number,
+): Promise<CreatePlanResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('exam_date', examDate)
+  formData.append('hours_per_day', String(hoursPerDay))
+
+  const response = await fetch('/api/plans/upload-syllabus', {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(message || `Upload failed: ${response.status}`)
+  }
+
+  return response.json() as Promise<CreatePlanResponse>
+}
+
 export function getPlan(id: string): Promise<Plan> {
   return request<Plan>(`/api/plans/${id}`)
 }

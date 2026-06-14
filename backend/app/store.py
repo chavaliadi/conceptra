@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from uuid import UUID, uuid4
 
 from app.fixtures.sample_plans import get_fixture_for_topic
@@ -10,10 +10,16 @@ plans: dict[UUID, PlanResponse] = {}
 def create_plan(request: CreatePlanRequest) -> PlanResponse:
     fixture = get_fixture_for_topic(request.topic)
     plan_id = uuid4()
+
+    # Use provided exam_date or default to 21 days from now
+    exam_date = request.exam_date
+    if exam_date is None:
+        exam_date = (date.today() + timedelta(days=21))
+
     plan = PlanResponse(
         id=plan_id,
         topic=request.topic.strip(),
-        exam_date=request.exam_date,
+        exam_date=exam_date,
         hours_per_day=request.hours_per_day,
         graph=fixture["graph"],
         schedule=fixture["schedule"],

@@ -50,7 +50,7 @@ class ConceptContent(BaseModel):
 
 class CreatePlanRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
-    exam_date: date
+    exam_date: date | None = Field(None)
     hours_per_day: int = Field(ge=1, le=8, default=2)
 
 
