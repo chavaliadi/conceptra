@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { getPlan } from '../api/client'
+import { getPlan, getProgress, updateProgress } from '../api/client'
 import ConceptPanel from '../components/ConceptPanel'
 import ConceptGraph from '../components/ConceptGraph'
 import PlanHeader from '../components/PlanHeader'
@@ -73,24 +73,68 @@ export default function PlanView() {
     if (!id) return
 
     let cancelled = false
+    let pollInterval: NodeJS.Timeout | null = null
+
+    const fetchPlanAndPoll = () => {
+      getPlan(id)
+        .then((data) => {
+          if (cancelled) return
+          setPlan(data)
+          
+          if (import.meta.env.VITE_API_VERSION === 'v2') {
+            if (data.status === 'generating') {
+              setLoading(false)
+              if (!pollInterval) {
+                pollInterval = setInterval(fetchPlanAndPoll, 2000)
+              }
+            } else {
+              if (pollInterval) {
+                clearInterval(pollInterval)
+                pollInterval = null
+              }
+              getProgress(id)
+                .then((dbStatuses) => {
+                  if (cancelled) return
+                  setStatuses({
+                    ...loadStatuses(id),
+                    ...(dbStatuses as Record<string, ConceptStatus>)
+                  })
+                  setLoading(false)
+                })
+                .catch((err) => {
+                  console.error('Failed to load progress from DB:', err)
+                  if (!cancelled) {
+                    setStatuses(loadStatuses(id))
+                    setLoading(false)
+                  }
+                })
+            }
+          } else {
+            setStatuses(loadStatuses(id))
+            setLoading(false)
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) {
+            setError(err.message)
+            setLoading(false)
+            if (pollInterval) {
+              clearInterval(pollInterval)
+              pollInterval = null
+            }
+          }
+        })
+    }
+
     setLoading(true)
     setError(null)
-
-    getPlan(id)
-      .then((data) => {
-        if (cancelled) return
-        setPlan(data)
-        setStatuses(loadStatuses(id))
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    fetchPlanAndPoll()
 
     return () => {
       cancelled = true
+      if (pollInterval) {
+        clearInterval(pollInterval)
+      }
     }
   }, [id])
 
@@ -144,6 +188,12 @@ export default function PlanView() {
       saveStatuses(id, next)
       return next
     })
+    
+    if (import.meta.env.VITE_API_VERSION === 'v2') {
+      updateProgress(id, conceptId, status).catch((err) => {
+        console.error('Failed to update progress in DB:', err)
+      })
+    }
   }
 
   function triggerReplan() {
@@ -189,6 +239,67 @@ export default function PlanView() {
         >
           Return to home
         </a>
+      </div>
+    )
+  }
+
+  if (plan.status === 'generating') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-center p-8 bg-slate-900/40 border border-slate-800 rounded-3xl max-w-xl mx-auto my-12 shadow-2xl relative overflow-hidden">
+        <div className="absolute -top-24 -left-24 w-48 h-48 bg-violet-600/10 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl animate-pulse" />
+        
+        <div className="relative z-10 space-y-6">
+          <div className="relative w-20 h-20 mx-auto">
+            <div className="absolute inset-0 border-4 border-violet-500/20 rounded-full" />
+            <div className="absolute inset-0 border-4 border-t-violet-500 rounded-full animate-spin" />
+            <span className="absolute inset-0 flex items-center justify-center text-2xl">🧠</span>
+          </div>
+          
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-white tracking-tight">Generating Study Plan</h2>
+            <p className="text-slate-400 text-sm max-w-sm mx-auto">
+              Our AI pipeline is busy parsing <strong>"{plan.topic}"</strong>, organizing core concepts, and validating prerequisites.
+            </p>
+          </div>
+          
+          <div className="border border-slate-800/80 bg-slate-950/60 rounded-2xl p-4 flex flex-col items-start space-y-3 max-w-md mx-auto text-left w-full">
+            <div className="flex items-center gap-3 text-xs">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+              <span className="text-slate-300 font-medium">Extracting core learning modules...</span>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="w-2.5 h-2.5 rounded-full bg-violet-500/40" />
+              <span className="text-slate-500">Formulating optimal dependency graph (DAG)...</span>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="w-2.5 h-2.5 rounded-full bg-violet-500/40" />
+              <span className="text-slate-500">Generating customized quiz sheets and references...</span>
+            </div>
+          </div>
+          
+          <p className="text-xs text-slate-500 italic animate-pulse">This typically takes 8-12 seconds. Thank you for your patience!</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (plan.status === 'failed') {
+    return (
+      <div className="text-center py-12 max-w-md mx-auto">
+        <div className="text-rose-500 text-5xl mb-4">⚠️</div>
+        <h2 className="text-lg font-bold text-white mb-2">Generation Failed</h2>
+        <p className="text-slate-400 text-sm mb-6">
+          The AI pipeline encountered an issue establishing the dependency graph or parsing the concept details for this topic.
+        </p>
+        <div className="flex justify-center gap-4">
+          <a
+            href="/"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs uppercase tracking-wider rounded-xl transition duration-200"
+          >
+            Return to home
+          </a>
+        </div>
       </div>
     )
   }

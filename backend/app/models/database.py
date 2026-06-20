@@ -55,6 +55,9 @@ class Plan(Base):
     progress: Mapped[list["Progress"]] = relationship(
         "Progress", back_populates="plan", cascade="all, delete-orphan"
     )
+    schedule: Mapped[list["Schedule"]] = relationship(
+        "Schedule", back_populates="plan", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint("hours_per_day >= 1 AND hours_per_day <= 8", name="ck_hours_valid"),
@@ -219,3 +222,35 @@ class Progress(Base):
         ),
         Index("idx_progress_plan_concept", "plan_id", "concept_id"),
     )
+
+
+class Schedule(Base):
+    __tablename__ = "schedule"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    plan_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("plans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    concept_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("concepts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    day: Mapped[int] = mapped_column(Integer, nullable=False)
+    priority: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
+
+    # Relationships
+    plan: Mapped["Plan"] = relationship("Plan", back_populates="schedule")
+    concept: Mapped["Concept"] = relationship("Concept")
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", "concept_id", name="uq_schedule_plan_concept"),
+        CheckConstraint("priority IN ('high', 'medium', 'low')", name="ck_schedule_priority"),
+        Index("idx_schedule_plan_id", "plan_id"),
+    )
+

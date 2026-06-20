@@ -67,3 +67,5 @@ class PlanResponse(BaseModel):
     schedule: list[ScheduleItem]
     content: dict[str, ConceptContent]
     created_at: datetime
+    status: str = "active"
+

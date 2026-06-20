@@ -1,9 +1,22 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.plans import router as plans_router
+from app.api.routes.plans_v2 import router as plans_v2_router
+from app.api.routes.ai_routes import router as ai_router
+from app.database import close_db
+from app.services.cache_service import init_redis, close_redis
 
-app = FastAPI(title="Conceptra API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_redis()
+    yield
+    await close_db()
+    await close_redis()
+
+
+app = FastAPI(title="Conceptra API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,8 +27,12 @@ app.add_middleware(
 )
 
 app.include_router(plans_router)
+app.include_router(plans_v2_router)
+app.include_router(ai_router)
+
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+

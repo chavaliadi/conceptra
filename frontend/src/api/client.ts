@@ -22,8 +22,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+const isV2 = import.meta.env.VITE_API_VERSION === 'v2'
+const API_PREFIX = isV2 ? '/api/v2/plans' : '/api/plans'
+
 export function createPlan(body: CreatePlanRequest): Promise<CreatePlanResponse> {
-  return request<CreatePlanResponse>('/api/plans', {
+  return request<CreatePlanResponse>(API_PREFIX, {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -39,7 +42,9 @@ export async function uploadSyllabus(
   formData.append('exam_date', examDate)
   formData.append('hours_per_day', String(hoursPerDay))
 
-  const response = await fetch('/api/plans/upload-syllabus', {
+  // Keep upload syllabus hitting the main endpoint as it is fixture based for now
+  const url = isV2 ? '/api/v2/plans/upload-syllabus' : '/api/plans/upload-syllabus'
+  const response = await fetch(url, {
     method: 'POST',
     body: formData,
   })
@@ -53,12 +58,35 @@ export async function uploadSyllabus(
 }
 
 export function getPlan(id: string): Promise<Plan> {
-  return request<Plan>(`/api/plans/${id}`)
+  return request<Plan>(`${API_PREFIX}/${id}`)
 }
 
 export function getConceptContent(
   planId: string,
   conceptId: string,
 ): Promise<ConceptContent> {
-  return request<ConceptContent>(`/api/plans/${planId}/concepts/${conceptId}/content`)
+  return request<ConceptContent>(`${API_PREFIX}/${planId}/concepts/${conceptId}/content`)
 }
+
+export function getProgress(planId: string): Promise<Record<string, string>> {
+  if (!isV2) {
+    // Return empty for v1 fallback (it uses localStorage)
+    return Promise.resolve({})
+  }
+  return request<Record<string, string>>(`${API_PREFIX}/${planId}/progress`)
+}
+
+export function updateProgress(
+  planId: string,
+  conceptId: string,
+  status: string,
+): Promise<{ status: string }> {
+  if (!isV2) {
+    return Promise.resolve({ status })
+  }
+  return request<{ status: string }>(`${API_PREFIX}/${planId}/concepts/${conceptId}/progress`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  })
+}
+
