@@ -1,9 +1,9 @@
-# Conceptra Phase 2: Production Database & AI Pipeline
-## Detailed Implementation Plan
+# Conceptra Master Roadmap: From Prototype to Production Study Companion
+## Detailed Implementation & Future Phases Plan
 
-**Last Updated:** June 15, 2026
+**Last Updated:** June 22, 2026
 **Project:** Conceptra - Study Intelligence Tool
-**Status:** Phase 2 Planning (Ready for Development)
+**Status:** Phase 3 Completed (Planning Next Phases)
 
 ---
 
@@ -1196,82 +1196,214 @@ async def test_get_plan_api(client):
 
 ---
 
-## Phase 3: Production Features
+## Phase 3: Production Features & Advanced Learning Optimization ✅
 
-### 3.1 Planned Features (Not Phase 2)
+We have fully implemented and verified all Phase 3 objectives, transitioning Conceptra from a single-session generator into a complete, personalized study companion.
 
-- **User Authentication** (JWT tokens, session management)
-- **Multi-User Support** (user profiles, plan sharing)
-- **Analytics Dashboard** (progress tracking, learning insights)
-- **Spaced Repetition** (SRS algorithm integration)
-- **Export Functionality** (PDF, JSON export)
-- **Adaptive Replanning** (AI-powered schedule adjustment)
-- **Caching Layer** (Redis for frequently accessed plans)
-- **Advanced Search** (full-text search across concepts)
-
-### 3.2 Deployment Considerations (Future)
-
-- Docker containerization
-- CI/CD pipeline (GitHub Actions)
-- AWS/GCP deployment
-- Horizontal scaling (load balancing)
-- Database backups and disaster recovery
+### Features Completed
+- **Clerk Authentication Integration:** Secured the application using Clerk. Verified RS256 JWT tokens on the backend using Clerk's JWKS endpoint. Supported plan claiming (binding anonymous plans to users on sign-up) and user-owned dashboard lists.
+- **AI-Driven Adaptive Replanning:** Built a schedule optimizer utilizing `networkx.descendants()` to locate struggling concept dependencies and redistributed remaining concepts using Groq Llama-3.3-70b-versatile, maintaining audit trails in `schedule_history`.
+- **Spaced Repetition System (SRS):** Built a flashcard review pipeline utilizing the SM-2 algorithm. Introduced interactive review decks with confidence grading (1-5) to dynamically update study intervals.
+- **Progress Analytics Dashboard:** Designed SVG progress meters, completion projections, and pacing stats dynamically calculated from database progress logs.
+- **SSE Streaming Generation:** Developed a Server-Sent Events stream using Redis PubSub (with database polling fallback) that renders concept-by-concept loading screens with animations as the AI designs the study plan.
+- **Export Study Materials:** Installed `reportlab` to compile and serve printable PDF study guides. Built pure-python RFC 5545 iCalendar `.ics` feed serialization for calendar subscriptions.
 
 ---
 
-## Why This Order Matters
+## Remaining Phases & Future Roadmap
 
-### Problem: The Spaghetti Test
-If you build AI first, then realize the database is wrong, you have to:
-1. Rewrite AI prompts
-2. Rewrite database schema
-3. Rewrite API responses
-4. Rewrite frontend integration
+To turn Conceptra into a market-leading study intelligence platform, we will tackle the remaining features across three distinct phases, built one-by-one.
 
-You're touching every layer simultaneously = exponential debugging.
+### Phase 4: Collaborative Workspaces & Social Study Features 🚀 (Next up)
+**Goal:** Empower students to study together, share knowledge, and build community around curated study guides.
 
-### Solution: The Layered Approach
+#### 4.1 Key Feature Architecture & Routes
+1. **Shared Study Plans:** Allow users to share links or collaborate on plans (read-only/write access).
+   * `POST /api/v2/plans/{plan_id}/share` -> Generates a secure share link with permission scope (`view_only` or `collaborator`).
+   * `GET /api/v2/plans/shared/{token}` -> Endpoint to access the shared plan and render in readonly mode, with a CTA to sign in and import/fork the plan.
+2. **Global Community Library:** A directory where users can publish high-quality, generated study plans for anyone to search, upvote, and fork.
+   * `GET /api/v2/library` -> List public study plans with sorting options (`trending`, `top_upvoted`, `newest`) and query search filters (`category`, `topic`).
+   * `POST /api/v2/plans/{plan_id}/publish` -> Change a plan's status to public and index it in the global directory.
+   * `POST /api/v2/plans/{plan_id}/fork` -> Clone a plan's graph structures, schedules, and explanations into the current user's profile under a new plan UUID.
+3. **Study Rooms / Groups:** Invite friends to study the same concepts, tracking group velocity and dashboard rankings.
+   * `POST /api/v2/groups` -> Create a collaborative study group.
+   * `POST /api/v2/groups/{group_id}/invite` -> Generate invite link or trigger username search invitation.
+   * `GET /api/v2/groups/{group_id}/dashboard` -> Returns leaderboard ranking of study progress across members (ranking by concepts completed/learned).
+
+#### 4.2 Proposed Database Schema Changes:
+```sql
+CREATE TABLE collaborative_groups (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(100) NOT NULL,
+    created_by VARCHAR(128) NOT NULL, -- Clerk User ID
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE group_members (
+    group_id UUID REFERENCES collaborative_groups(id) ON DELETE CASCADE,
+    clerk_user_id VARCHAR(128) NOT NULL,
+    role VARCHAR(50) DEFAULT 'member', -- owner, admin, member
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (group_id, clerk_user_id)
+);
+
+CREATE TABLE shared_plans (
+    plan_id UUID REFERENCES plans(id) ON DELETE CASCADE,
+    group_id UUID REFERENCES collaborative_groups(id) ON DELETE CASCADE,
+    permission VARCHAR(50) DEFAULT 'view', -- view, edit
+    PRIMARY KEY (plan_id, group_id)
+);
+
+CREATE TABLE plan_upvotes (
+    plan_id UUID REFERENCES plans(id) ON DELETE CASCADE,
+    clerk_user_id VARCHAR(128) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plan_id, clerk_user_id)
+);
 ```
-Layer 1: Database (stable baseline)
-         ↑ Test this before moving on
-Layer 2: CRUD API (proven data flow)
-         ↑ Test this before moving on
-Layer 3: React Integration (UI verified)
-         ↑ Test this before moving on
-Layer 4: AI Pipeline (final layer)
-         ↑ Everything below is rock solid
+
+#### 4.3 UI/UX Layout Mockups & Components:
+- **`CommunityLibrary.tsx`**: A dashboard grid displaying cards of public plans, showing name, description, tags, author name, and number of upvotes. Features tabs to toggle between "Trending" and "My Library". Includes a fork CTA on each card.
+- **`GroupDashboard.tsx`**: Renders group progress as horizontal bar charts comparing member study velocity. Includes a real-time message stream component in the sidebar displaying event alerts (e.g. *"Alice has mastered 'Dynamic Programming' in the Algorithms Group"*).
+- **`Sidebar/ShareModal`**: Popover on the PlanView sidebar allowing users to select visibility (Private, Public Library, or Shared Group) and click a button to copy invite links.
+
+#### 4.4 Tactics & Step-by-Step Execution:
+1. **Step 4.1: Database Migrations:** Establish groups, members, upvotes, and share schemas. Optimize query performance by indexing `plan_upvotes(plan_id)` and `group_members(clerk_user_id)`.
+2. **Step 4.2: Shared Workspace & Group APIs:** Build backend routes for group management, membership, plan sharing, and upvoting.
+3. **Step 4.3: Community Library Page:** Develop the community discovery UI with category categorization, search routing, and duplicate cloning ("Forking") logic.
+4. **Step 4.4: Leaderboard & Activity Feed:** Build WebSocket sync support to emit study progress updates to active group members, rendering notifications and refreshing leaderboard logs.
+
+---
+
+### Phase 5: Conversational AI Learning Tools (Active Tutor Chat) 🔮
+**Goal:** Transform the static explanation panel into an active conversational tutor that explains complex concepts, grades open-ended quizzes, and customizes content on the fly.
+
+#### 5.1 Key Feature Architecture & LLM Prompts
+1. **Active Tutor Chat Drawer:** Let students toggle from standard definitions into a conversational tutor window.
+   * Prompting Context: When the conversation starts, prime the LLM with system logs detailing the student's progress status, exam date, and plan details:
+     ```text
+     You are "Conceptra Tutor", a world-class teacher. 
+     The student is studying: {concept_name}. 
+     Description: {concept_description}. 
+     Their current status is: {concept_status}.
+     Help explain this concept in response to their questions. Avoid answering unrelated topics. 
+     If they ask for sample code, write elegant syntax with step-by-step notes.
+     ```
+2. **Dynamic Flashcard Extension:** Let users request additional practice questions to test themselves.
+   * `POST /api/v2/plans/{plan_id}/concepts/{concept_id}/quiz/extend` -> Triggers Groq to generate 3 additional practice flashcards tailored specifically to the topics discussed in the tutor chat.
+3. **LLM-Based Soft Grading Engine:** Move from strict string equality on quiz answer submissions to AI soft grading.
+   * When checking a short-answer quiz, instead of comparing exact strings, send the user's response to the LLM:
+     ```text
+     Question: {question}
+     Reference Answer: {answer}
+     Student Response: {student_response}
+     
+     Grade the student response on a scale of 0-100. Provide a short 1-sentence comment explaining what was correct and what was missing. 
+     Return valid JSON matching: {"score": 85, "explanation": "You correctly stated X, but forgot to mention Y."}
+     ```
+4. **Syllabus PDF Highlight Overlay:**
+   * When syllabus files are uploaded, track character offsets and coordinate mappings. Show a split-pane layout: on the left, the rendered PDF canvas; on the right, the ConceptPanel with links. Clicking "Show Source" on a concept highlights the extracted paragraphs on the PDF page.
+
+#### 5.2 Proposed Database Schema Changes:
+```sql
+CREATE TABLE concept_chats (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    clerk_user_id VARCHAR(128) NOT NULL,
+    concept_id UUID REFERENCES concepts(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL, -- user, assistant
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    INDEX idx_user_concept (clerk_user_id, concept_id)
+);
 ```
 
-If AI breaks, you immediately know it's the AI. Not the database. Not the API. **Just the AI.**
+#### 5.3 Tactics & Step-by-Step Execution:
+1. **Step 5.1: Conversational Chat API:** Implement the DB-backed chat messaging endpoint with pagination and sliding chat message history limits.
+2. **Step 5.2: Tutor Chat UI:** Integrate an expandable chatbot pane inside `ConceptPanel.tsx`. Build markdown rendering support (e.g. `react-markdown` and syntax highlighters for code blocks).
+3. **Step 5.3: Soft Grading Engine:** Integrate Groq API callbacks for grading short-answer quizzes. Provide a detailed grading scorecard indicating areas of misunderstanding.
+4. **Step 5.4: Split PDF Viewer:** Implement a custom PDF canvas interface using `pdfjs-dist` to overlay highlighted segments corresponding to concept extractions.
 
 ---
 
-## Recruiting Value
+### Phase 6: Cloud Production Deployment, Performance, and Monitoring 🔮
+**Goal:** Transition from a local development workspace into a secure, scaled, auto-recovering multi-cloud deployment with metrics logging and alert diagnostics.
 
-This architecture demonstrates:
+#### 6.1 Multi-Container Architecture Configuration
+1. **Nginx Proxy Configuration:**
+   Nginx acts as the single gateway ingress, serving React files and proxying requests to the backend server:
+   ```nginx
+   server {
+       listen 80;
+       server_name app.conceptra.com;
 
-1. **Systems Design** — Normalized schema, indexed queries, DAG reasoning
-2. **API Design** — Versioning strategy, Pydantic validation, repository pattern
-3. **Software Engineering** — Separation of concerns, layered testing, error handling
-4. **AI/ML** — Prompt engineering, response validation, retry logic
-5. **Database** — Schema design, migrations, query optimization
+       location / {
+           root /usr/share/nginx/html;
+           try_files $uri $uri/ /index.html;
+       }
 
-**Interview Question You'll Be Ready For:**
-> "Walk us through your Conceptra architecture."
+       location /api {
+           proxy_pass http://api-backend:8000;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+       
+       #  SSE connection optimization
+       location ~ ^/api/v2/plans/[a-f0-9-]+/stream$ {
+           proxy_pass http://api-backend:8000;
+           proxy_set_header Host $host;
+           proxy_set_header Connection '';
+           proxy_http_version 1.1;
+           chunked_transfer_encoding off;
+           proxy_buffering off;
+           proxy_read_timeout 600s;
+       }
+   }
+   ```
+2. **Gunicorn Production Setup:**
+   Run the ASGI application with `uvicorn.workers.UvicornWorker` inside container settings:
+   `gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120`
 
-**Your Answer:**
-> "I built it in layers. First, a normalized PostgreSQL schema with concepts, edges, and content. Then FastAPI CRUD endpoints with Pydantic validation. Then I connected React to use database instead of fixtures—zero UI changes. Finally, I plugged Ollama + Qwen3:4b into a generation endpoint with networkx DAG validation. Each layer was independently testable, so debugging was isolated."
+#### 6.2 Caching & Invalidation Strategy (Redis)
+- **Caching endpoints:** Cache analytical boards `/analytics` and read-only maps `/plans/{id}`.
+- **Cache Invalidation rules:**
+  - Invalidate `/analytics` and `/plans/{id}` whenever concept progress status is updated (`PATCH /progress`).
+  - Invalidate plan caches whenever a schedule is replanned (`POST /replan`).
+  - Set TTL of 1 hour on dynamic endpoints.
 
-That's a **hiring conversation**, not a rejection.
+#### 6.3 Deployment & Infrastructure Diagram (AWS Fargate)
+```
+          HTTPS Request
+               ↓
+     Application Load Balancer (ALB)
+          /         \
+   Frontend Container  Backend Container (FastAPI)
+   (Nginx & React)     (Gunicorn/Uvicorn ASGI)
+                           /         \
+            RDS Postgres DB           ElastiCache Redis
+            (ACID storage)            (PubSub & Cache)
+```
+
+#### 6.4 Tactics & Step-by-Step Execution:
+1. **Step 6.1: Docker & Nginx Orchestration:** Write multi-stage Dockerfiles optimizing asset builds (minimizing React bundle sizes). Write docker-compose files mimicking production orchestration for local QA checks.
+2. **Step 6.2: CI/CD Pipeline Build:** Set up GitHub Actions workflow:
+   - Run type checks (`tsc --noEmit`) and pytest suites.
+   - Build docker tags, push them to AWS ECR, and execute a rolling container update deployment command.
+3. **Step 6.3: Provisioning Cloud Services (IaC):** Write Terraform templates to provision secure subnets, ALB routes, Postgres DB instances, and serverless compute clusters.
+4. **Step 6.4: Monitoring & Diagnostics Integration:** Configure Prometheus metrics routes (`/metrics`) inside FastAPI. Add Sentry logging capture to trigger notifications to Discord/Slack on pipeline generation failures.
 
 ---
 
-## Summary
+## Tactical Execution Plan: Proceeding Phase-by-Phase
 
-**Phase 1:** ✅ Working UI with fixtures
-**Phase 2:** Build production database and AI pipeline layer-by-layer
-**Phase 3:** Multi-user features, analytics, deployment
+To execute this roadmap efficiently and maintain stability:
 
-The key principle: **Isolate failure points through layered architecture.**
+1. **Step-by-Step Isolation:** We will proceed with **one phase at a time**.
+2. **Branching Strategy:** Each task in the roadmap will be developed on a feature branch (e.g., `feature/phase-4-collaboration`) and merged into `main` only after passing typescript verification and backend tests.
+3. **Database Consistency:** Database migration scripts (Alembic) will be run and tested for backward compatibility on existing plans before backend endpoints are merged.
+4. **Visual Testing:** Design iterations will be validated visually first using the `generate_image` mockup tool and iterated on with stakeholders before locking in CSS systems.
 
-Good luck!
+---
+
+This Master Roadmap ensures that Conceptra scales sustainably from a simple study guide generator into a globally collaborative, AI-powered active study companion.
