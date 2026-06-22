@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { getPlan, getProgress, updateProgress } from '../api/client'
+import { useAuth } from '@clerk/clerk-react'
+import { getPlan, getProgress, updateProgress, claimPlan, replanSchedule } from '../api/client'
 import ConceptPanel from '../components/ConceptPanel'
 import ConceptGraph from '../components/ConceptGraph'
 import PlanHeader from '../components/PlanHeader'
+import AnalyticsDashboard from '../components/AnalyticsDashboard'
 import type { Concept, ConceptStatus, Plan } from '../types'
 
 const statusBorder: Record<ConceptStatus, string> = {
@@ -58,6 +60,7 @@ function saveStatuses(planId: string, statuses: Record<string, ConceptStatus>) {
 
 export default function PlanView() {
   const { id } = useParams<{ id: string }>()
+  const { getToken, isSignedIn } = useAuth()
   const [plan, setPlan] = useState<Plan | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -69,74 +72,177 @@ export default function PlanView() {
   const [replanning, setReplanning] = useState(false)
   const [replanSuccess, setReplanSuccess] = useState(false)
 
+  // Local state for streaming logs
+  const [streamStep, setStreamStep] = useState<string>('idle')
+  const [streamLog, setStreamLog] = useState<string>('Initiating plan generation...')
+  const [streamConcepts, setStreamConcepts] = useState<any[]>([])
+  const [streamEdges, setStreamEdges] = useState<any[]>([])
+  const [streamSchedule, setStreamSchedule] = useState<any[]>([])
+  const [streamContent, setStreamContent] = useState<Record<string, any>>({})
+
   useEffect(() => {
     if (!id) return
 
     let cancelled = false
-    let pollInterval: NodeJS.Timeout | null = null
+    let eventSource: EventSource | null = null
 
-    const fetchPlanAndPoll = () => {
-      getPlan(id)
-        .then((data) => {
-          if (cancelled) return
-          setPlan(data)
-          
-          if (import.meta.env.VITE_API_VERSION === 'v2') {
-            if (data.status === 'generating') {
-              setLoading(false)
-              if (!pollInterval) {
-                pollInterval = setInterval(fetchPlanAndPoll, 2000)
-              }
-            } else {
-              if (pollInterval) {
-                clearInterval(pollInterval)
-                pollInterval = null
-              }
-              getProgress(id)
-                .then((dbStatuses) => {
-                  if (cancelled) return
-                  setStatuses({
-                    ...loadStatuses(id),
-                    ...(dbStatuses as Record<string, ConceptStatus>)
-                  })
-                  setLoading(false)
+    const fetchPlan = async () => {
+      try {
+        const token = await getToken()
+        const data = await getPlan(id, token)
+        if (cancelled) return
+        
+        setPlan(data)
+        setLoading(false)
+
+        if (import.meta.env.VITE_API_VERSION === 'v2' && data.status === 'generating') {
+          // Initialize EventSource
+          const url = `/api/v2/plans/${id}/stream`
+          eventSource = new EventSource(url)
+
+          eventSource.addEventListener('generating_concepts', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('generating_concepts')
+            setStreamLog(eventData.message)
+          })
+
+          eventSource.addEventListener('concepts_extracted', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('concepts_extracted')
+            setStreamConcepts(eventData.concepts)
+            setPlan((prev) => prev ? {
+              ...prev,
+              graph: { ...prev.graph, concepts: eventData.concepts }
+            } : null)
+          })
+
+          eventSource.addEventListener('generating_graph', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('generating_graph')
+            setStreamLog(eventData.message)
+          })
+
+          eventSource.addEventListener('graph_generated', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('graph_generated')
+            setStreamEdges(eventData.edges)
+            setPlan((prev) => prev ? {
+              ...prev,
+              graph: { ...prev.graph, edges: eventData.edges }
+            } : null)
+          })
+
+          eventSource.addEventListener('generating_schedule', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('generating_schedule')
+            setStreamLog(eventData.message)
+          })
+
+          eventSource.addEventListener('schedule_generated', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('schedule_generated')
+            setStreamSchedule(eventData.schedule)
+            setPlan((prev) => prev ? {
+              ...prev,
+              schedule: eventData.schedule
+            } : null)
+          })
+
+          eventSource.addEventListener('generating_content', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('generating_content')
+            setStreamLog(eventData.message)
+          })
+
+          eventSource.addEventListener('content_generated', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('content_generated')
+            setStreamContent(eventData.content)
+            setPlan((prev) => prev ? {
+              ...prev,
+              content: eventData.content
+            } : null)
+          })
+
+          eventSource.addEventListener('completed', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setStreamStep('completed')
+            setPlan((prev) => prev ? {
+              ...prev,
+              status: 'completed'
+            } : null)
+            eventSource?.close()
+            // Fetch DB progress statuses
+            getProgress(id, token).then((dbStatuses) => {
+              if (!cancelled) {
+                setStatuses({
+                  ...loadStatuses(id),
+                  ...(dbStatuses as Record<string, ConceptStatus>)
                 })
-                .catch((err) => {
-                  console.error('Failed to load progress from DB:', err)
-                  if (!cancelled) {
-                    setStatuses(loadStatuses(id))
-                    setLoading(false)
-                  }
-                })
-            }
-          } else {
+              }
+            }).catch(err => console.error('Failed to load progress from DB:', err))
+          })
+
+          eventSource.addEventListener('failed', (event: any) => {
+            const eventData = JSON.parse(event.data)
+            setError(eventData.error || 'Plan generation failed')
+            setPlan((prev) => prev ? { ...prev, status: 'failed' } : null)
+            eventSource?.close()
+          })
+
+          eventSource.onerror = (err) => {
+            console.error('EventSource failed:', err)
+          }
+        } else if (import.meta.env.VITE_API_VERSION === 'v2') {
+          try {
+            const dbStatuses = await getProgress(id, token)
+            if (cancelled) return
+            setStatuses({
+              ...loadStatuses(id),
+              ...(dbStatuses as Record<string, ConceptStatus>)
+            })
+          } catch (err) {
+            console.error('Failed to load progress from DB:', err)
             setStatuses(loadStatuses(id))
-            setLoading(false)
           }
-        })
-        .catch((err: Error) => {
-          if (!cancelled) {
-            setError(err.message)
-            setLoading(false)
-            if (pollInterval) {
-              clearInterval(pollInterval)
-              pollInterval = null
-            }
-          }
-        })
+        } else {
+          setStatuses(loadStatuses(id))
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err.message)
+          setLoading(false)
+        }
+      }
     }
 
     setLoading(true)
     setError(null)
-    fetchPlanAndPoll()
+    fetchPlan()
 
     return () => {
       cancelled = true
-      if (pollInterval) {
-        clearInterval(pollInterval)
+      if (eventSource) {
+        eventSource.close()
       }
     }
-  }, [id])
+  }, [id, getToken])
+
+  useEffect(() => {
+    if (isSignedIn && id && import.meta.env.VITE_API_VERSION === 'v2') {
+      const claimAnonymousPlan = async () => {
+        try {
+          const token = await getToken()
+          if (token) {
+            await claimPlan(id, token)
+          }
+        } catch (err) {
+          console.log('Claim plan failed/already claimed:', err)
+        }
+      }
+      claimAnonymousPlan()
+    }
+  }, [isSignedIn, id, getToken])
 
   const learnedCount = useMemo(
     () => Object.values(statuses).filter((s) => s === 'learned').length,
@@ -181,7 +287,7 @@ export default function PlanView() {
     return statuses[conceptId] ?? 'untouched'
   }
 
-  function updateStatus(conceptId: string, status: ConceptStatus) {
+  async function updateStatus(conceptId: string, status: ConceptStatus) {
     if (!id) return
     setStatuses((prev) => {
       const next = { ...prev, [conceptId]: status }
@@ -190,37 +296,59 @@ export default function PlanView() {
     })
     
     if (import.meta.env.VITE_API_VERSION === 'v2') {
-      updateProgress(id, conceptId, status).catch((err) => {
+      try {
+        const token = await getToken()
+        await updateProgress(id, conceptId, status, token)
+      } catch (err) {
         console.error('Failed to update progress in DB:', err)
-      })
+      }
     }
   }
 
-  function triggerReplan() {
-    if (!plan) return
+  async function triggerReplan() {
+    if (!plan || !id) return
     setReplanning(true)
 
-    setTimeout(() => {
-      setReplanning(false)
-      setReplanSuccess(true)
+    if (import.meta.env.VITE_API_VERSION === 'v2') {
+      try {
+        const token = await getToken()
+        const updatedSchedule = await replanSchedule(id, token)
+        setPlan({
+          ...plan,
+          schedule: updatedSchedule,
+        })
+        setReplanSuccess(true)
+      } catch (err) {
+        console.error('Failed to replan schedule:', err)
+        alert(err instanceof Error ? err.message : 'Replanning failed')
+      } finally {
+        setReplanning(false)
+        setTimeout(() => setReplanSuccess(false), 3000)
+      }
+    } else {
+      // V1 Mock Fallback
+      setTimeout(() => {
+        setReplanning(false)
+        setReplanSuccess(true)
 
-      // Perform mock AI schedule redistribution by changing priority and shifting order
-      const updatedSchedule = plan.schedule.map((item) => {
-        if (statuses[item.concept_id] === 'struggling') {
-          // Escalating priority of struggling concepts
-          return { ...item, priority: 'high' as const }
-        }
-        return item
-      })
+        // Perform mock AI schedule redistribution by changing priority and shifting order
+        const updatedSchedule = plan.schedule.map((item) => {
+          if (statuses[item.concept_id] === 'struggling') {
+            // Escalating priority of struggling concepts
+            return { ...item, priority: 'high' as const }
+          }
+          return item
+        })
 
-      setPlan({
-        ...plan,
-        schedule: updatedSchedule,
-      })
+        setPlan({
+          ...plan,
+          schedule: updatedSchedule,
+        })
 
-      // Hide success notification after 3 seconds
-      setTimeout(() => setReplanSuccess(false), 3000)
-    }, 1800)
+        // Hide success notification after 3 seconds
+        setTimeout(() => setReplanSuccess(false), 3000)
+      }, 1800)
+    }
   }
 
   if (loading) {
@@ -244,41 +372,110 @@ export default function PlanView() {
   }
 
   if (plan.status === 'generating') {
+    const isStepActive = (step: string) => streamStep === step
+    const isStepDone = (stepList: string[], current: string) => {
+      const idx = stepList.indexOf(current)
+      const activeIdx = stepList.indexOf(streamStep)
+      return activeIdx > idx || streamStep === 'completed'
+    }
+    const stepsOrder = [
+      'generating_concepts',
+      'concepts_extracted',
+      'generating_graph',
+      'graph_generated',
+      'generating_schedule',
+      'schedule_generated',
+      'generating_content',
+      'content_generated'
+    ]
+
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] text-center p-8 bg-slate-900/40 border border-slate-800 rounded-3xl max-w-xl mx-auto my-12 shadow-2xl relative overflow-hidden">
+      <div className="flex flex-col items-center justify-center min-h-[450px] text-center p-8 bg-slate-900/40 border border-slate-800 rounded-3xl max-w-xl mx-auto my-12 shadow-2xl relative overflow-hidden">
         <div className="absolute -top-24 -left-24 w-48 h-48 bg-violet-600/10 rounded-full blur-3xl animate-pulse" />
         <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl animate-pulse" />
         
-        <div className="relative z-10 space-y-6">
+        <div className="relative z-10 space-y-6 w-full">
           <div className="relative w-20 h-20 mx-auto">
             <div className="absolute inset-0 border-4 border-violet-500/20 rounded-full" />
-            <div className="absolute inset-0 border-4 border-t-violet-500 rounded-full animate-spin" />
+            <div className="absolute inset-0 border-4 border-transparent border-t-violet-500 border-r-fuchsia-500 rounded-full animate-spin" />
             <span className="absolute inset-0 flex items-center justify-center text-2xl">🧠</span>
           </div>
           
           <div className="space-y-2">
             <h2 className="text-xl font-bold text-white tracking-tight">Generating Study Plan</h2>
-            <p className="text-slate-400 text-sm max-w-sm mx-auto">
-              Our AI pipeline is busy parsing <strong>"{plan.topic}"</strong>, organizing core concepts, and validating prerequisites.
-            </p>
+            <p className="text-violet-400 text-sm font-medium animate-pulse">{streamLog}</p>
           </div>
           
-          <div className="border border-slate-800/80 bg-slate-950/60 rounded-2xl p-4 flex flex-col items-start space-y-3 max-w-md mx-auto text-left w-full">
-            <div className="flex items-center gap-3 text-xs">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <span className="text-slate-300 font-medium">Extracting core learning modules...</span>
+          <div className="border border-slate-800/80 bg-slate-950/60 rounded-2xl p-5 flex flex-col items-start space-y-4 max-w-md mx-auto text-left w-full">
+            {/* Step 1: Extract Concepts */}
+            <div className="flex flex-col w-full">
+              <div className="flex items-center gap-3 text-xs">
+                {isStepActive('generating_concepts') ? (
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-ping shrink-0" />
+                ) : isStepDone(stepsOrder, 'generating_concepts') ? (
+                  <span className="text-emerald-400 font-bold text-sm shrink-0">✓</span>
+                ) : (
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-800 shrink-0" />
+                )}
+                <span className={`font-medium ${isStepActive('generating_concepts') ? 'text-white' : 'text-slate-400'}`}>
+                  Extracting core concepts...
+                </span>
+              </div>
+              {streamConcepts.length > 0 && (
+                <div className="mt-2 pl-6 flex flex-wrap gap-1.5 transition-all duration-300">
+                  {streamConcepts.map((c, i) => (
+                    <span key={i} className="text-[10px] bg-slate-900 border border-slate-800 text-slate-300 px-2 py-0.5 rounded-md">
+                      {c.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="w-2.5 h-2.5 rounded-full bg-violet-500/40" />
-              <span className="text-slate-500">Formulating optimal dependency graph (DAG)...</span>
+
+            {/* Step 2: Relationships */}
+            <div className="flex flex-col w-full">
+              <div className="flex items-center gap-3 text-xs">
+                {isStepActive('generating_graph') ? (
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-ping shrink-0" />
+                ) : isStepDone(stepsOrder, 'generating_graph') ? (
+                  <span className="text-emerald-400 font-bold text-sm shrink-0">✓</span>
+                ) : (
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-800 shrink-0" />
+                )}
+                <span className={`font-medium ${isStepActive('generating_graph') ? 'text-white' : 'text-slate-400'}`}>
+                  Formulating dependency graph (DAG)...
+                </span>
+              </div>
+              {streamEdges.length > 0 && (
+                <div className="mt-1.5 pl-6 text-[10px] text-violet-400 font-mono">
+                  ⚡ Connected {streamEdges.length} concept dependencies
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="w-2.5 h-2.5 rounded-full bg-violet-500/40" />
-              <span className="text-slate-500">Generating customized quiz sheets and references...</span>
+
+            {/* Step 3: Calendar & Study Guide */}
+            <div className="flex flex-col w-full">
+              <div className="flex items-center gap-3 text-xs">
+                {(isStepActive('generating_schedule') || isStepActive('generating_content')) ? (
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-ping shrink-0" />
+                ) : isStepDone(stepsOrder, 'generating_content') ? (
+                  <span className="text-emerald-400 font-bold text-sm shrink-0">✓</span>
+                ) : (
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-800 shrink-0" />
+                )}
+                <span className={`font-medium ${(isStepActive('generating_schedule') || isStepActive('generating_content')) ? 'text-white' : 'text-slate-400'}`}>
+                  Synthesizing learning guides & quizzes...
+                </span>
+              </div>
+              {Object.keys(streamContent).length > 0 && (
+                <div className="mt-1.5 pl-6 text-[10px] text-emerald-400 font-mono">
+                  📖 Explanations & flashcards completed
+                </div>
+              )}
             </div>
           </div>
           
-          <p className="text-xs text-slate-500 italic animate-pulse">This typically takes 8-12 seconds. Thank you for your patience!</p>
+          <p className="text-xs text-slate-500 italic animate-pulse">Running advanced learning analytics engine...</p>
         </div>
       </div>
     )
@@ -336,6 +533,13 @@ export default function PlanView() {
       {replanSuccess && (
         <div className="mb-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 shadow-lg text-emerald-400 font-medium text-sm flex items-center gap-2.5 animate-pulse">
           <span>✓</span> AI optimized study calendar! Struggling concepts escalated to priority high and redistributed.
+        </div>
+      )}
+
+      {/* Progress Analytics Dashboard */}
+      {import.meta.env.VITE_API_VERSION === 'v2' && (
+        <div className="mb-8">
+          <AnalyticsDashboard planId={id} statuses={statuses} />
         </div>
       )}
 

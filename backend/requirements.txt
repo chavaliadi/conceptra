@@ -11,5 +11,5 @@ redis>=5.0.0
 networkx>=3.2.0
 httpx>=0.25.0
 greenlet
-
-
+pyjwt[crypto]>=2.13.0
+reportlab>=5.0.0

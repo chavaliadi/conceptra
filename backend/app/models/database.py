@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -38,6 +39,7 @@ class Plan(Base):
     exam_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hours_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+    clerk_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -58,6 +60,9 @@ class Plan(Base):
     schedule: Mapped[list["Schedule"]] = relationship(
         "Schedule", back_populates="plan", cascade="all, delete-orphan"
     )
+    schedule_history: Mapped[list["ScheduleHistory"]] = relationship(
+        "ScheduleHistory", back_populates="plan", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint("hours_per_day >= 1 AND hours_per_day <= 8", name="ck_hours_valid"),
@@ -67,6 +72,7 @@ class Plan(Base):
         ),
         Index("idx_plans_created_at", "created_at"),
         Index("idx_plans_status", "status"),
+        Index("idx_plans_clerk_user_id", "clerk_user_id"),
     )
 
 
@@ -209,6 +215,12 @@ class Progress(Base):
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    
+    # SRS scheduling variables
+    next_review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    interval_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ease_factor: Mapped[float] = mapped_column(Float, nullable=False, default=2.5)
+    repetitions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Relationships
     plan: Mapped["Plan"] = relationship("Plan", back_populates="progress")
@@ -221,6 +233,7 @@ class Progress(Base):
             name="ck_progress_status",
         ),
         Index("idx_progress_plan_concept", "plan_id", "concept_id"),
+        Index("idx_progress_next_review", "next_review_at"),
     )
 
 
@@ -252,5 +265,31 @@ class Schedule(Base):
         UniqueConstraint("plan_id", "concept_id", name="uq_schedule_plan_concept"),
         CheckConstraint("priority IN ('high', 'medium', 'low')", name="ck_schedule_priority"),
         Index("idx_schedule_plan_id", "plan_id"),
+    )
+
+
+class ScheduleHistory(Base):
+    __tablename__ = "schedule_history"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    plan_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("plans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    original_schedule: Mapped[list] = mapped_column(JSONB, nullable=False)
+    new_schedule: Mapped[list] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    plan: Mapped["Plan"] = relationship("Plan", back_populates="schedule_history")
+
+    __table_args__ = (
+        Index("idx_schedule_history_plan_id", "plan_id"),
     )
 

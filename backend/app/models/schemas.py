@@ -69,3 +69,29 @@ class PlanResponse(BaseModel):
     created_at: datetime
     status: str = "active"
 
+
+class DueReviewItem(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    explanation: str
+    quiz: list[QuizQuestion]
+    resources: list[Resource]
+    status: str
+    next_review_at: datetime | None = None
+
+
+class AnalyticsResponse(BaseModel):
+    total_concepts: int
+    learned_count: int
+    struggling_count: int
+    untouched_count: int
+    skipped_count: int
+    progress_percentage: float
+    days_left: int
+    daily_velocity_needed: float
+    projected_completion_date: date
+    status_assessment: Literal["On Track", "Behind", "Critical"]
+
+
+

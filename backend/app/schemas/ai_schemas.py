@@ -59,3 +59,14 @@ class ConceptContentAI(BaseModel):
 
 class BatchContentResponse(BaseModel):
     concepts: List[ConceptContentAI]
+
+
+# --- Replanning schemas ---
+class AIReplanScheduleItem(BaseModel):
+    concept_id: str
+    week: int
+    day: int
+    priority: Literal["high", "medium", "low"]
+
+class ReplanResponse(BaseModel):
+    schedule: List[AIReplanScheduleItem]

@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import type { FormEvent, DragEvent, ChangeEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '@clerk/clerk-react'
 import { createPlan, uploadSyllabus } from '../api/client'
 
 function defaultExamDate(): string {
@@ -18,6 +19,7 @@ const loadingSteps = [
 
 export default function Landing() {
   const navigate = useNavigate()
+  const { getToken } = useAuth()
   const [inputMode, setInputMode] = useState<'topic' | 'pdf'>('topic')
   const [topic, setTopic] = useState('')
 
@@ -99,16 +101,17 @@ export default function Landing() {
     setLoadingStep(0)
 
     try {
+      const token = await getToken()
       // Initiate API call based on input mode
       let response
       if (inputMode === 'pdf' && pdfFile) {
-        response = await uploadSyllabus(pdfFile, examDate, hoursPerDay)
+        response = await uploadSyllabus(pdfFile, examDate, hoursPerDay, token)
       } else {
         response = await createPlan({
           topic: finalTopic,
           exam_date: examDate,
           hours_per_day: hoursPerDay,
-        })
+        }, token)
       }
 
       // Simulate visually premium sequential loading steps for Phase 1

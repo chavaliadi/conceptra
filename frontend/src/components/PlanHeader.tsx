@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { Plan } from '../types'
 
 interface PlanHeaderProps {
@@ -45,6 +46,33 @@ export default function PlanHeader({ plan, learnedCount }: PlanHeaderProps) {
               <span className="text-xs">{copied ? '✓' : '🔗'}</span>
               <span>{copied ? 'Link copied!' : 'Share Plan'}</span>
             </button>
+            <Link
+              to={`/plan/${plan.id}/review`}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-violet-600 hover:bg-violet-500 px-2.5 py-1 text-xs text-white transition duration-200"
+            >
+              <span>🗂️</span>
+              <span>Review Deck</span>
+            </Link>
+            {import.meta.env.VITE_API_VERSION === 'v2' && (
+              <>
+                <a
+                  href={`/api/v2/plans/${plan.id}/export/pdf`}
+                  download
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/50 hover:bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white transition duration-200"
+                >
+                  <span>📄</span>
+                  <span>Export PDF</span>
+                </a>
+                <a
+                  href={`/api/v2/plans/${plan.id}/export/ics`}
+                  download
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/50 hover:bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white transition duration-200"
+                >
+                  <span>📅</span>
+                  <span>Sync Calendar</span>
+                </a>
+              </>
+            )}
           </div>
           <p className="mt-2 text-sm text-slate-400">
             Exam on {new Date(plan.exam_date + 'T00:00:00').toLocaleDateString()} ·{' '}

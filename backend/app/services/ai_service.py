@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import httpx
+import networkx as nx
 from typing import List, Dict, Any
 from app.schemas.ai_schemas import (
     AIConceptItem,
@@ -9,7 +10,9 @@ from app.schemas.ai_schemas import (
     AIEdge,
     GraphResponse,
     ConceptContentAI,
-    BatchContentResponse
+    BatchContentResponse,
+    ReplanResponse,
+    AIReplanScheduleItem
 )
 
 logger = logging.getLogger(__name__)
@@ -141,3 +144,76 @@ async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContent
             logger.warning(f"Stage 4 content generation attempt {attempt} failed: {e}")
             if attempt == 3:
                 raise RuntimeError(f"Failed to generate content batch after 3 attempts: {e}")
+
+async def replan_schedule(
+    topic: str,
+    concepts: List[Dict[str, Any]],      # List of {"id": str, "name": str}
+    edges: List[Dict[str, Any]],         # List of {"from_id": str, "to_id": str}
+    current_schedule: List[Dict[str, Any]], # List of {"concept_id": str, "week": int, "day": int, "priority": str}
+    struggling_ids: List[str],            # List of concept string IDs
+    remaining_days: int
+) -> List[AIReplanScheduleItem]:
+    """Call Groq to redistribute study schedule based on struggling concepts."""
+    # Build the descendants using networkx
+    G = nx.DiGraph()
+    for c in concepts:
+        G.add_node(c["id"])
+    for e in edges:
+        G.add_edge(e["from_id"], e["to_id"])
+        
+    descendants = set()
+    for sid in struggling_ids:
+        if G.has_node(sid):
+            descendants.update(nx.descendants(G, sid))
+            
+    # Prepare prompt inputs
+    concepts_info = []
+    for c in concepts:
+        cid = c["id"]
+        status = "struggling" if cid in struggling_ids else ("dependent" if cid in descendants else "normal")
+        concepts_info.append(f"- ID: {cid}, Name: {c['name']}, Description: {c.get('description', '')}, Status: {status}")
+        
+    current_sched_info = []
+    for s in current_schedule:
+        current_sched_info.append(f"- Concept ID: {s['concept_id']}, Week: {s['week']}, Day: {s['day']}, Priority: {s['priority']}")
+        
+    system_prompt = "You are a graph theory and study scheduling routing expert. You output valid JSON."
+    prompt = f"""
+    We need to adaptively replan a study schedule for the topic "{topic}".
+    The student is struggling with some concepts. We need to redistribute the study schedule over the remaining {remaining_days} days.
+    
+    CRITICAL INSTRUCTIONS:
+    1. Struggling concepts (marked as "struggling") and their downstream dependents (marked as "dependent") should be delayed or prioritized higher.
+    2. Concepts that are normal or already learned should be compressed/accelerated.
+    3. The schedule MUST respect prerequisite order (edges): a concept cannot be studied before its prerequisites are complete.
+    4. Provide week and day assignments assuming 5 study days per week (Days 1 to 5).
+    5. Output the entire schedule (all concept IDs) in a single valid JSON list.
+    
+    Concepts metadata:
+    {"\n".join(concepts_info)}
+    
+    Dependencies (Prerequisite -> Dependent):
+    {json.dumps(edges)}
+    
+    Current Schedule:
+    {"\n".join(current_sched_info)}
+    
+    You MUST return a JSON object with a single key "schedule" containing a list of objects, each with:
+    - "concept_id": the ID of the concept (matching input list)
+    - "week": the week number (integer starting from 1)
+    - "day": the day number (integer from 1 to 5)
+    - "priority": the priority string ("high", "medium", "low")
+    
+    Output the JSON now:
+    """
+    
+    for attempt in range(1, 4):
+        temp = 0.1 * attempt
+        try:
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
+            validated = ReplanResponse.model_validate(result_json)
+            return validated.schedule
+        except Exception as e:
+            logger.warning(f"AI replanning attempt {attempt} failed: {e}")
+            if attempt == 3:
+                raise RuntimeError(f"Failed to generate replanned schedule after 3 attempts: {e}")

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 import type { Concept, ConceptContent, ConceptStatus } from '../types'
 import { getConceptContent } from '../api/client'
 
@@ -30,6 +31,7 @@ export default function ConceptPanel({
   onStatusChange,
   onClose,
 }: ConceptPanelProps) {
+  const { getToken } = useAuth()
   const [content, setContent] = useState<ConceptContent | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -44,16 +46,19 @@ export default function ConceptPanel({
     setRevealedAnswers({})
     setSelectedOptions({})
 
-    getConceptContent(planId, concept.id)
-      .then((data) => {
+    const fetchContent = async () => {
+      try {
+        const token = await getToken()
+        const data = await getConceptContent(planId, concept.id, token)
         if (!cancelled) setContent(data)
-      })
-      .catch((err: Error) => {
+      } catch (err: any) {
         if (!cancelled) setError(err.message)
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+
+    fetchContent()
 
     return () => {
       cancelled = true

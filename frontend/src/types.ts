@@ -63,3 +63,29 @@ export interface CreatePlanResponse {
 }
 
 export type ConceptStatus = 'untouched' | 'learned' | 'struggling' | 'skipped'
+
+export interface DueReviewItem {
+  id: string
+  name: string
+  description: string | null
+  explanation: string
+  quiz: QuizQuestion[]
+  resources: Resource[]
+  status: string
+  next_review_at: string | null
+}
+
+export interface AnalyticsData {
+  total_concepts: number
+  learned_count: number
+  struggling_count: number
+  untouched_count: number
+  skipped_count: number
+  progress_percentage: number
+  days_left: number
+  daily_velocity_needed: number
+  projected_completion_date: string
+  status_assessment: 'On Track' | 'Behind' | 'Critical'
+}
+
+
