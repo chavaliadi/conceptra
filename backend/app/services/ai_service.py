@@ -20,13 +20,27 @@ logger = logging.getLogger(__name__)
 
 from app.services.llm_provider import get_llm_provider
 
-async def _call_groq_json(prompt: str, system_prompt: str = "You are a helpful assistant.", temperature: float = 0.1) -> Dict[str, Any]:
+async def _call_groq_json(prompt: str, system_prompt: str = "You are a helpful assistant.", temperature: float = 0.1, max_tokens: int | None = None) -> Dict[str, Any]:
     """Helper to call LLM provider and guarantee JSON output."""
     provider = get_llm_provider()
-    res = await provider.generate(prompt, system_prompt, temperature, response_format="json")
+    res = await provider.generate(prompt, system_prompt, temperature, response_format="json", max_tokens=max_tokens)
     if isinstance(res, dict):
         return res
     raise ValueError("Expected JSON response from LLMProvider")
+
+async def _handle_retry_sleep(attempt: int, error: Exception):
+    """Parse retry-after time from Groq error message and sleep, adding jitter to avoid collision."""
+    import random
+    sleep_time = 3 * attempt + random.uniform(0.5, 2.0)
+    try:
+        import re
+        match = re.search(r"try again in ([\d\.]+)s", str(error))
+        if match:
+            sleep_time = float(match.group(1)) + random.uniform(0.5, 1.5)
+    except Exception:
+        pass
+    logger.info(f"Rate limit hit. Sleeping for {sleep_time:.2f} seconds before retry attempt {attempt + 1}")
+    await asyncio.sleep(sleep_time)
 
 async def extract_concepts(topic: str, num_concepts: int = 8) -> List[AIConceptItem]:
     """Stage 1: Extract concepts from a topic with up to 3 retries."""
@@ -42,17 +56,18 @@ async def extract_concepts(topic: str, num_concepts: int = 8) -> List[AIConceptI
     Generate exactly {num_concepts} concepts.
     """
     
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=600)
             # Validate with Pydantic
             validated = ExtractResponse.model_validate(result_json)
             return validated.concepts
         except Exception as e:
             logger.warning(f"Stage 1 extraction attempt {attempt} failed: {e}")
-            if attempt == 3:
-                raise RuntimeError(f"Failed to extract concepts after 3 attempts: {e}")
+            if attempt == 5:
+                raise RuntimeError(f"Failed to extract concepts after 5 attempts: {e}")
+            await _handle_retry_sleep(attempt, e)
 
 async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     """Stage 2: Build dependency edges between concepts with up to 3 retries (including DAG validation)."""
@@ -76,17 +91,18 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     3. Ensure there is a path through all concepts where possible, but keep edges reasonable (typically N-1 to N*1.5 edges).
     """
     
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=400)
             # Validate with Pydantic (which runs DAG cycle checking)
             validated = GraphResponse.model_validate(result_json)
             return validated.edges
         except Exception as e:
             logger.warning(f"Stage 2 graph generation attempt {attempt} failed: {e}")
-            if attempt == 3:
-                raise RuntimeError(f"Failed to generate dependency graph after 3 attempts: {e}")
+            if attempt == 5:
+                raise RuntimeError(f"Failed to generate dependency graph after 5 attempts: {e}")
+            await _handle_retry_sleep(attempt, e)
 
 async def generate_single_concept_content(concept: AIConceptItem) -> ConceptContentAI:
     """Generate detailed explanation, quiz, and resources for a single concept with up to 3 retries."""
@@ -109,28 +125,31 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
     - "resources": the list of resources
     """
     
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=800)
             # Validate with Pydantic
             validated = ConceptContentAI.model_validate(result_json)
             return validated
         except Exception as e:
             logger.warning(f"Stage 4 single concept content generation attempt {attempt} for {concept.name} failed: {e}")
-            if attempt == 3:
-                raise RuntimeError(f"Failed to generate content for concept {concept.name} after 3 attempts: {e}")
+            if attempt == 5:
+                raise RuntimeError(f"Failed to generate content for concept {concept.name} after 5 attempts: {e}")
+            await _handle_retry_sleep(attempt, e)
 
 async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContentAI]:
     """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
     # We use a semaphore to avoid overloading the Groq API rate limits (TPM/RPM limits)
-    semaphore = asyncio.Semaphore(4)
+    semaphore = asyncio.Semaphore(2)
     
-    async def sem_task(concept: AIConceptItem) -> ConceptContentAI:
+    async def sem_task(index: int, concept: AIConceptItem) -> ConceptContentAI:
+        # Stagger start by 1.2s to prevent initial rate-limit collisions
+        await asyncio.sleep(index * 1.2)
         async with semaphore:
             return await generate_single_concept_content(concept)
             
-    tasks = [sem_task(c) for c in concepts]
+    tasks = [sem_task(i, c) for i, c in enumerate(concepts)]
     results = await asyncio.gather(*tasks)
     return list(results)
 
@@ -196,13 +215,14 @@ async def replan_schedule(
     Output the JSON now:
     """
     
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=500)
             validated = ReplanResponse.model_validate(result_json)
             return validated.schedule
         except Exception as e:
             logger.warning(f"AI replanning attempt {attempt} failed: {e}")
-            if attempt == 3:
-                raise RuntimeError(f"Failed to generate replanned schedule after 3 attempts: {e}")
+            if attempt == 5:
+                raise RuntimeError(f"Failed to generate replanned schedule after 5 attempts: {e}")
+            await _handle_retry_sleep(attempt, e)

@@ -1,6 +1,6 @@
 import os
 import redis
-from rq import Worker, Queue
+from rq import SimpleWorker, Queue
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
@@ -12,8 +12,8 @@ queue = Queue("default", connection=conn)
 
 def run_worker():
     """Start an RQ worker process listening to the 'default' queue."""
-    print(f"Starting RQ Worker connected to {REDIS_URL}...")
-    worker = Worker([queue], connection=conn)
+    print(f"Starting RQ SimpleWorker connected to {REDIS_URL}...")
+    worker = SimpleWorker([queue], connection=conn)
     worker.work()
 
 if __name__ == "__main__":

@@ -172,7 +172,7 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             await PlanRepository.update_status(db, plan_id, "completed")
             await db.commit()
             logger.info(f"Successfully generated plan {plan_id} in background")
-            await publish_progress(plan_id, "completed", status="completed", plan_id=str(plan_id))
+            await publish_progress(plan_id, "completed", status="completed")
             
             # Save to Redis Cache
             try:
@@ -206,10 +206,15 @@ def generate_plan_background_sync(plan_id_str: str, topic: str, num_concepts: in
     from uuid import UUID
     async def wrapper():
         from app.services.cache_service import init_redis, close_redis
+        from app.database import close_db
         await init_redis()
         try:
             await generate_plan_background(UUID(plan_id_str), topic, num_concepts, hours_per_day)
         finally:
+            try:
+                await close_db()
+            except Exception as db_err:
+                logger.warning(f"Failed to close database in worker: {db_err}")
             await close_redis()
             
     asyncio.run(wrapper())

@@ -14,7 +14,8 @@ class LLMProvider(ABC):
         prompt: str,
         system_prompt: str = "You are a helpful assistant.",
         temperature: float = 0.1,
-        response_format: str = "json"  # "json" or "text"
+        response_format: str = "json",  # "json" or "text"
+        max_tokens: int | None = None
     ) -> Dict[str, Any] | str:
         """Generate content from the LLM.
 
@@ -35,7 +36,8 @@ class GroqProvider(LLMProvider):
         prompt: str,
         system_prompt: str = "You are a helpful assistant.",
         temperature: float = 0.1,
-        response_format: str = "json"
+        response_format: str = "json",
+        max_tokens: int | None = None
     ) -> Dict[str, Any] | str:
         if not self.api_key:
             raise ValueError("GROQ_API_KEY environment variable is not set!")
@@ -55,9 +57,17 @@ class GroqProvider(LLMProvider):
         }
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self.api_url, headers=headers, json=payload)
+            if response.status_code == 429 and payload.get("model") == "llama-3.3-70b-versatile":
+                logger.warning("Groq rate limit (TPM/TPD) exceeded on llama-3.3-70b-versatile. Falling back to llama-3.1-8b-instant permanently...")
+                self.model = "llama-3.1-8b-instant"
+                payload["model"] = "llama-3.1-8b-instant"
+                response = await client.post(self.api_url, headers=headers, json=payload)
+                
             if response.status_code != 200:
                 logger.error(f"Groq API error (status {response.status_code}): {response.text}")
                 raise RuntimeError(f"Groq API failed: {response.text}")
@@ -93,23 +103,18 @@ class GroqProvider(LLMProvider):
                 from app.database import AsyncSessionLocal
                 from app.models.database import ApiUsageLog
 
-                async def log_to_db():
-                    async with AsyncSessionLocal() as db:
-                        log_entry = ApiUsageLog(
-                            action_name=action,
-                            provider="groq",
-                            tokens_prompt=prompt_tokens,
-                            tokens_completion=completion_tokens,
-                            latency_ms=latency,
-                            cost_usd=cost,
-                            cache_hit=False
-                        )
-                        db.add(log_entry)
-                        await db.commit()
-
-                # Dispatch the log DB operation into the background event loop
-                import asyncio
-                asyncio.create_task(log_to_db())
+                async with AsyncSessionLocal() as db:
+                    log_entry = ApiUsageLog(
+                        action_name=action,
+                        provider="groq",
+                        tokens_prompt=prompt_tokens,
+                        tokens_completion=completion_tokens,
+                        latency_ms=latency,
+                        cost_usd=cost,
+                        cache_hit=False
+                    )
+                    db.add(log_entry)
+                    await db.commit()
             except Exception as log_err:
                 logger.warning(f"Failed to log API usage statistics: {log_err}")
 
