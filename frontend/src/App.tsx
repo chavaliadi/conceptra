@@ -4,6 +4,8 @@ import Landing from './pages/Landing'
 import PlanView from './pages/PlanView'
 import Dashboard from './pages/Dashboard'
 import ReviewDeck from './pages/ReviewDeck'
+import CommunityLibrary from './pages/CommunityLibrary'
+import BenchmarkDashboard from './pages/BenchmarkDashboard'
 
 export default function App() {
   return (
@@ -14,6 +16,8 @@ export default function App() {
           <Route path="/plan/:id" element={<PlanView />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/plan/:id/review" element={<ReviewDeck />} />
+          <Route path="/library" element={<CommunityLibrary />} />
+          <Route path="/benchmarks" element={<BenchmarkDashboard />} />
         </Route>
       </Routes>
     </BrowserRouter>

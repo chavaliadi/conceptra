@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
-import { listPlans, deletePlan } from '../api/client'
+import { listPlans, deletePlan, getWeeklyReport } from '../api/client'
 import type { Plan } from '../types'
 
 export default function Dashboard() {
@@ -10,6 +10,11 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<Plan[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Weekly performance report states
+  const [activeReportPlanId, setActiveReportPlanId] = useState<string | null>(null)
+  const [weeklyReport, setWeeklyReport] = useState<any | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
 
   useEffect(() => {
     if (!isLoaded) return
@@ -24,6 +29,9 @@ export default function Dashboard() {
         const token = await getToken()
         const data = await listPlans(token)
         setPlans(data)
+        if (data.length > 0 && !activeReportPlanId) {
+          setActiveReportPlanId(data[0].id)
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch plans')
       } finally {
@@ -32,7 +40,24 @@ export default function Dashboard() {
     }
 
     fetchPlans()
-  }, [isLoaded, isSignedIn, navigate])
+  }, [isLoaded, isSignedIn, navigate, activeReportPlanId])
+
+  useEffect(() => {
+    if (!activeReportPlanId) return
+    const fetchReport = async () => {
+      try {
+        setReportLoading(true)
+        const token = await getToken()
+        const res = await getWeeklyReport(activeReportPlanId, token)
+        setWeeklyReport(res)
+      } catch (err) {
+        console.error('Failed to load weekly report', err)
+      } finally {
+        setReportLoading(false)
+      }
+    }
+    fetchReport()
+  }, [activeReportPlanId])
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.preventDefault()
@@ -88,6 +113,98 @@ export default function Dashboard() {
       {error && (
         <div className="mb-6 p-4 rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-300 text-sm">
           ⚠️ {error}
+        </div>
+      )}
+
+      {/* Weekly Report Dashboard Panel */}
+      {plans.length > 0 && (
+        <div className="relative mb-10 overflow-hidden rounded-3xl border border-slate-900 bg-slate-900/30 backdrop-blur-md p-6 sm:p-8 space-y-6">
+          <div className="absolute -top-24 -right-24 w-60 h-60 bg-indigo-500/10 rounded-full blur-[80px]" />
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-855 pb-4">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-md">
+                Learning Performance
+              </span>
+              <h2 className="text-xl font-bold text-white mt-1.5">Weekly AI Study Digest</h2>
+            </div>
+            
+            {/* Dropdown to select plan */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-400 font-medium">Select Plan:</span>
+              <select
+                value={activeReportPlanId || ''}
+                onChange={(e) => setActiveReportPlanId(e.target.value)}
+                className="bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none cursor-pointer"
+              >
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>{p.topic}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {reportLoading ? (
+            <div className="flex flex-col items-center justify-center py-6">
+              <div className="w-6 h-6 border-2 border-violet-500/20 border-t-violet-500 rounded-full animate-spin mb-2" />
+              <p className="text-xs text-slate-500">Compiling your performance digest...</p>
+            </div>
+          ) : weeklyReport ? (
+            <div className="grid gap-6 md:grid-cols-3">
+              {/* Stat 1 */}
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-900 space-y-1.5">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Mastery Pacing</span>
+                <p className="text-2xl font-extrabold text-emerald-400">
+                  {weeklyReport.concepts_mastered} <span className="text-xs font-normal text-slate-500">/ {weeklyReport.total_concepts} mastered</span>
+                </p>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500"
+                    style={{ width: `${(weeklyReport.concepts_mastered / (weeklyReport.total_concepts || 1)) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Stat 2 */}
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-900 space-y-1.5">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Avg Confidence</span>
+                <p className="text-2xl font-extrabold text-violet-400">
+                  {weeklyReport.average_confidence}%
+                </p>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-violet-500"
+                    style={{ width: `${weeklyReport.average_confidence}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Stat 3 */}
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-900 space-y-1.5">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Week Weakness Topics</span>
+                <div className="flex flex-wrap gap-1.5 mt-1 overflow-y-auto max-h-[42px]">
+                  {weeklyReport.weaknesses.length === 0 ? (
+                    <span className="text-slate-400 text-xs py-0.5">None! Performing great! 🎉</span>
+                  ) : (
+                    weeklyReport.weaknesses.map((w: string) => (
+                      <span key={w} className="text-[9px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full truncate max-w-[120px]">
+                        ⚠️ {w}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* AI Coach recommendation */}
+              <div className="md:col-span-3 bg-violet-900/10 border border-violet-900/20 p-4 rounded-2xl">
+                <h4 className="text-xs font-bold text-violet-400 uppercase tracking-wider mb-1.5">Coach Recommendation</h4>
+                <p className="text-xs leading-relaxed text-slate-300 italic">
+                  &quot;{weeklyReport.recommendation}&quot;
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Failed to compile summary.</p>
+          )}
         </div>
       )}
 

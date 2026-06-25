@@ -122,7 +122,12 @@ export default function Landing() {
 
       navigate(`/plan/${response.id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create plan')
+      const msg = err instanceof Error ? err.message : 'Failed to create plan'
+      if (msg.includes('NON_SEARCHABLE_PDF')) {
+        setError("This PDF doesn't contain selectable text. Please upload a searchable PDF.")
+      } else {
+        setError(msg)
+      }
       setLoading(false)
     }
   }

@@ -1,14 +1,15 @@
 """
 SQLAlchemy ORM models for Conceptra.
 
-Tables: plans, concepts, edges, concept_content, progress
-Note: schedule and schedule_history are deferred to Wave 2D and Phase 3 respectively.
+Tables: plans, concepts, edges, concept_content, progress, schedule, schedule_history
+Phase 4 additions: is_public + forked_from_id on plans (Knowledge Sharing).
 """
 
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -40,6 +41,13 @@ class Plan(Base):
     hours_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     clerk_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Phase 4: Knowledge Sharing
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    forked_from_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -73,6 +81,7 @@ class Plan(Base):
         Index("idx_plans_created_at", "created_at"),
         Index("idx_plans_status", "status"),
         Index("idx_plans_clerk_user_id", "clerk_user_id"),
+        Index("idx_plans_is_public", "is_public"),
     )
 
 
@@ -292,4 +301,10 @@ class ScheduleHistory(Base):
     __table_args__ = (
         Index("idx_schedule_history_plan_id", "plan_id"),
     )
+
+# Register Phase 5 intelligence models in metadata
+from app.models.learning_intelligence import TutorChatMessage, StudentMistake, LearningProfile
+
+# Register Phase 6 observability models in metadata
+from app.models.api_usage_logs import ApiUsageLog
 

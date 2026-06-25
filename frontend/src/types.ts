@@ -44,12 +44,33 @@ export interface ConceptContent {
 export interface Plan {
   id: string
   topic: string
-  exam_date: string
+  exam_date: string | null
   hours_per_day: number
   graph: Graph
   schedule: ScheduleItem[]
   content: Record<string, ConceptContent>
   created_at: string
+  is_public?: boolean
+  clerk_user_id?: string | null
+  forked_from_id?: string | null
+  status?: 'completed' | 'generating' | 'failed'
+}
+
+export interface LibraryPlanItem {
+  id: string
+  topic: string
+  hours_per_day: number
+  exam_date?: string | null
+  created_at: string
+  concept_count: number
+  clerk_user_id?: string | null
+  forked_from_id?: string | null
+}
+
+export interface ForkResponse {
+  original_plan_id: string
+  new_plan_id: string
+  topic: string
 }
 
 export interface CreatePlanRequest {
@@ -86,6 +107,34 @@ export interface AnalyticsData {
   daily_velocity_needed: number
   projected_completion_date: string
   status_assessment: 'On Track' | 'Behind' | 'Critical'
+}
+
+export interface TutorChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface QuizGradeRequest {
+  question_id: string
+  question_text: string
+  student_answer: string
+  correct_answer: string
+}
+
+export interface QuizGradeResponse {
+  correct: boolean
+  score: number
+  feedback: string
+}
+
+export interface LearningProfile {
+  mastery_score: number
+  confidence_score: number
+  retention_score: number
+  difficulty_score: number
+  recommended_action: string | null
 }
 
 

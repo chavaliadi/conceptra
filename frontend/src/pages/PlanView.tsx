@@ -1,19 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
-import { getPlan, getProgress, updateProgress, claimPlan, replanSchedule } from '../api/client'
+import { getPlan, getProgress, updateProgress, claimPlan, replanSchedule, getEdgeExplanation } from '../api/client'
 import ConceptPanel from '../components/ConceptPanel'
 import ConceptGraph from '../components/ConceptGraph'
 import PlanHeader from '../components/PlanHeader'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 import type { Concept, ConceptStatus, Plan } from '../types'
 
-const statusBorder: Record<ConceptStatus, string> = {
-  untouched: 'border-slate-800 hover:border-slate-700 bg-slate-900/40',
-  learned: 'border-emerald-500/50 bg-emerald-500/5 shadow-sm shadow-emerald-950/20',
-  struggling: 'border-amber-500/50 bg-amber-500/5 shadow-sm shadow-amber-950/20',
-  skipped: 'border-rose-500/30 bg-rose-500/5 opacity-70',
-}
+
 
 const statusBadge: Record<ConceptStatus, string> = {
   untouched: 'bg-slate-950 text-slate-400 border border-slate-800',
@@ -77,8 +72,34 @@ export default function PlanView() {
   const [streamLog, setStreamLog] = useState<string>('Initiating plan generation...')
   const [streamConcepts, setStreamConcepts] = useState<any[]>([])
   const [streamEdges, setStreamEdges] = useState<any[]>([])
-  const [streamSchedule, setStreamSchedule] = useState<any[]>([])
   const [streamContent, setStreamContent] = useState<Record<string, any>>({})
+
+  // Edge Explainer States
+  const [selectedEdge, setSelectedEdge] = useState<{ fromId: string; toId: string; fromName: string; toName: string } | null>(null)
+  const [edgeExplanation, setEdgeExplanation] = useState<string | null>(null)
+  const [edgeLoading, setEdgeLoading] = useState(false)
+
+  useEffect(() => {
+    if (!selectedEdge) {
+      setEdgeExplanation(null)
+      return
+    }
+
+    const fetchExplanation = async () => {
+      try {
+        setEdgeLoading(true)
+        const token = await getToken()
+        const res = await getEdgeExplanation(selectedEdge.fromId, selectedEdge.toId, token)
+        setEdgeExplanation(res.explanation)
+      } catch (err) {
+        setEdgeExplanation('Failed to load dependency explanation.')
+      } finally {
+        setEdgeLoading(false)
+      }
+    }
+
+    fetchExplanation()
+  }, [selectedEdge])
 
   useEffect(() => {
     if (!id) return
@@ -141,7 +162,6 @@ export default function PlanView() {
           eventSource.addEventListener('schedule_generated', (event: any) => {
             const eventData = JSON.parse(event.data)
             setStreamStep('schedule_generated')
-            setStreamSchedule(eventData.schedule)
             setPlan((prev) => prev ? {
               ...prev,
               schedule: eventData.schedule
@@ -164,8 +184,7 @@ export default function PlanView() {
             } : null)
           })
 
-          eventSource.addEventListener('completed', (event: any) => {
-            const eventData = JSON.parse(event.data)
+          eventSource.addEventListener('completed', () => {
             setStreamStep('completed')
             setPlan((prev) => prev ? {
               ...prev,
@@ -539,7 +558,7 @@ export default function PlanView() {
       {/* Progress Analytics Dashboard */}
       {import.meta.env.VITE_API_VERSION === 'v2' && (
         <div className="mb-8">
-          <AnalyticsDashboard planId={id} statuses={statuses} />
+          <AnalyticsDashboard planId={id || ""} statuses={statuses} />
         </div>
       )}
 
@@ -583,6 +602,7 @@ export default function PlanView() {
               plan={plan}
               statuses={statuses}
               onSelectConcept={setSelectedConcept}
+              onSelectEdge={(fromId, toId, fromName, toName) => setSelectedEdge({ fromId, toId, fromName, toName })}
             />
           </div>
         </div>
@@ -659,6 +679,47 @@ export default function PlanView() {
             onClose={() => setSelectedConcept(null)}
           />
         </>
+      )}
+
+      {/* Edge Explainer Modal Overlay */}
+      {selectedEdge && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 transition-all duration-300">
+          <div className="relative w-full max-w-md rounded-2xl border border-slate-900 bg-slate-950 p-6 shadow-2xl space-y-4">
+            <button
+              onClick={() => setSelectedEdge(null)}
+              className="absolute top-4 right-4 rounded-lg p-1.5 text-slate-400 hover:bg-slate-900 hover:text-white transition"
+              aria-label="Close explanation"
+            >
+              ✕
+            </button>
+            <div className="space-y-1.5">
+              <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-md">
+                Dependency Link Explanation
+              </span>
+              <h3 className="text-base font-bold text-white leading-snug">
+                Why study &quot;{selectedEdge.fromName}&quot; before &quot;{selectedEdge.toName}&quot;?
+              </h3>
+            </div>
+            <div className="text-xs leading-relaxed text-slate-300 min-h-[4.5rem] flex items-center bg-slate-900/40 p-4 rounded-xl border border-slate-900">
+              {edgeLoading ? (
+                <div className="flex items-center gap-2 text-slate-400 text-xs animate-pulse">
+                  <div className="w-4 h-4 border-2 border-violet-500/20 border-t-violet-500 rounded-full animate-spin" />
+                  <span>Synthesizing relationship explanation...</span>
+                </div>
+              ) : (
+                <p>{edgeExplanation}</p>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setSelectedEdge(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition duration-200"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

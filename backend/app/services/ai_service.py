@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 import httpx
 import networkx as nx
 from typing import List, Dict, Any
@@ -17,39 +18,15 @@ from app.schemas.ai_schemas import (
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+from app.services.llm_provider import get_llm_provider
 
 async def _call_groq_json(prompt: str, system_prompt: str = "You are a helpful assistant.", temperature: float = 0.1) -> Dict[str, Any]:
-    """Helper to call Groq API and guarantee JSON output."""
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY environment variable is not set!")
-        
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": temperature,
-        "response_format": {"type": "json_object"},
-        "stream": False
-    }
-    
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(GROQ_API_URL, headers=headers, json=payload)
-        if response.status_code != 200:
-            logger.error(f"Groq API error (status {response.status_code}): {response.text}")
-            raise RuntimeError(f"Groq API failed: {response.text}")
-            
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        return json.loads(content)
+    """Helper to call LLM provider and guarantee JSON output."""
+    provider = get_llm_provider()
+    res = await provider.generate(prompt, system_prompt, temperature, response_format="json")
+    if isinstance(res, dict):
+        return res
+    raise ValueError("Expected JSON response from LLMProvider")
 
 async def extract_concepts(topic: str, num_concepts: int = 8) -> List[AIConceptItem]:
     """Stage 1: Extract concepts from a topic with up to 3 retries."""
@@ -111,23 +88,22 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
             if attempt == 3:
                 raise RuntimeError(f"Failed to generate dependency graph after 3 attempts: {e}")
 
-async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContentAI]:
-    """Stage 4: Generate explanations, quizzes, and resources for all concepts in one batched call."""
-    concepts_data = [{"id": c.id, "name": c.name, "description": c.description} for c in concepts]
-    concepts_json = json.dumps(concepts_data, indent=2)
-    
+async def generate_single_concept_content(concept: AIConceptItem) -> ConceptContentAI:
+    """Generate detailed explanation, quiz, and resources for a single concept with up to 3 retries."""
     system_prompt = "You are an elite technical educator who creates high-quality learning content and outputs JSON."
     prompt = f"""
-    Generate detailed explanations, quizzes, and resources for the following concepts:
-    {concepts_json}
+    Generate a detailed explanation, quiz, and resources for the following concept:
+    ID: {concept.id}
+    Name: {concept.name}
+    Description: {concept.description}
 
-    For EACH concept in the list, you MUST generate:
+    You MUST generate:
     1. "explanation": A detailed, clear explanation (2-3 sentences) explaining the core concept.
     2. "quiz": A list of exactly 3 quiz questions. The first 2 must be multiple-choice ("type": "mcq") with an "options" list of 4 options and the correct "answer" matching one of the options. The 3rd question must be a short-answer question ("type": "short_answer") with no options and a sample correct "answer".
     3. "resources": A list of 2-3 study resources. Each must have "type" ("video", "docs", or "article"), a "title", and a "url" (use realistic educational domains like youtube.com, wikipedia.org, or docs.python.org).
 
-    You MUST return a JSON object with a single key "concepts" which is a list of objects, each having:
-    - "concept_id": the ID of the concept matching the input list (e.g. "c1")
+    You MUST return a JSON object with the following fields:
+    - "concept_id": Must be "{concept.id}"
     - "explanation": the explanation string
     - "quiz": the list of 3 questions
     - "resources": the list of resources
@@ -138,12 +114,25 @@ async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContent
         try:
             result_json = await _call_groq_json(prompt, system_prompt, temperature=temp)
             # Validate with Pydantic
-            validated = BatchContentResponse.model_validate(result_json)
-            return validated.concepts
+            validated = ConceptContentAI.model_validate(result_json)
+            return validated
         except Exception as e:
-            logger.warning(f"Stage 4 content generation attempt {attempt} failed: {e}")
+            logger.warning(f"Stage 4 single concept content generation attempt {attempt} for {concept.name} failed: {e}")
             if attempt == 3:
-                raise RuntimeError(f"Failed to generate content batch after 3 attempts: {e}")
+                raise RuntimeError(f"Failed to generate content for concept {concept.name} after 3 attempts: {e}")
+
+async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContentAI]:
+    """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
+    # We use a semaphore to avoid overloading the Groq API rate limits (TPM/RPM limits)
+    semaphore = asyncio.Semaphore(4)
+    
+    async def sem_task(concept: AIConceptItem) -> ConceptContentAI:
+        async with semaphore:
+            return await generate_single_concept_content(concept)
+            
+    tasks = [sem_task(c) for c in concepts]
+    results = await asyncio.gather(*tasks)
+    return list(results)
 
 async def replan_schedule(
     topic: str,

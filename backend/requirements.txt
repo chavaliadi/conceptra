@@ -13,3 +13,7 @@ httpx>=0.25.0
 greenlet
 pyjwt[crypto]>=2.13.0
 reportlab>=5.0.0
+rq>=1.15.0
+slowapi>=0.1.9
+sentry-sdk[fastapi]>=1.40.0
+prometheus-client>=0.19.0

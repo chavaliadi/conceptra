@@ -10,6 +10,12 @@ export default function Layout() {
             <Link to="/" className="text-xl font-bold tracking-tight text-white hover:opacity-90 transition">
               Conceptra
             </Link>
+            <Link to="/library" className="text-sm font-medium text-slate-400 hover:text-white transition">
+              Library
+            </Link>
+            <Link to="/benchmarks" className="text-sm font-medium text-slate-400 hover:text-white transition">
+              Benchmarks
+            </Link>
             <SignedIn>
               <Link to="/dashboard" className="text-sm font-medium text-slate-400 hover:text-white transition">
                 My Plans

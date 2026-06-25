@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '@clerk/clerk-react'
+import { publishPlan } from '../api/client'
 import type { Plan } from '../types'
 
 interface PlanHeaderProps {
@@ -7,7 +9,8 @@ interface PlanHeaderProps {
   learnedCount: number
 }
 
-function daysUntilExam(examDate: string): number {
+function daysUntilExam(examDate: string | null | undefined): number {
+  if (!examDate) return 0
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const exam = new Date(examDate + 'T00:00:00')
@@ -16,7 +19,12 @@ function daysUntilExam(examDate: string): number {
 }
 
 export default function PlanHeader({ plan, learnedCount }: PlanHeaderProps) {
+  const { getToken, userId } = useAuth()
   const [copied, setCopied] = useState(false)
+  const [isPublic, setIsPublic] = useState(plan.is_public ?? false)
+  const [publishing, setPublishing] = useState(false)
+
+  const isOwner = plan.clerk_user_id === userId
   const total = plan.graph.concepts.length
   const daysLeft = daysUntilExam(plan.exam_date)
   const progress = total === 0 ? 0 : Math.round((learnedCount / total) * 100)
@@ -25,6 +33,19 @@ export default function PlanHeader({ plan, learnedCount }: PlanHeaderProps) {
     navigator.clipboard.writeText(window.location.href)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  async function handlePublishToggle() {
+    try {
+      setPublishing(true)
+      const token = await getToken()
+      const res = await publishPlan(plan.id, token)
+      setIsPublic(res.is_public)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to change visibility')
+    } finally {
+      setPublishing(false)
+    }
   }
 
   return (
@@ -46,6 +67,21 @@ export default function PlanHeader({ plan, learnedCount }: PlanHeaderProps) {
               <span className="text-xs">{copied ? '✓' : '🔗'}</span>
               <span>{copied ? 'Link copied!' : 'Share Plan'}</span>
             </button>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={handlePublishToggle}
+                disabled={publishing}
+                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition duration-200 ${
+                  isPublic
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                    : 'border-violet-500/40 bg-violet-500/10 text-violet-400 hover:bg-violet-500/20'
+                }`}
+              >
+                <span>{publishing ? '⏳' : isPublic ? '🌐' : '🔒'}</span>
+                <span>{publishing ? 'Updating...' : isPublic ? 'Public' : 'Publish'}</span>
+              </button>
+            )}
             <Link
               to={`/plan/${plan.id}/review`}
               className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-violet-600 hover:bg-violet-500 px-2.5 py-1 text-xs text-white transition duration-200"
@@ -75,8 +111,9 @@ export default function PlanHeader({ plan, learnedCount }: PlanHeaderProps) {
             )}
           </div>
           <p className="mt-2 text-sm text-slate-400">
-            Exam on {new Date(plan.exam_date + 'T00:00:00').toLocaleDateString()} ·{' '}
-            {plan.hours_per_day}h/day
+            {plan.exam_date
+              ? <>Exam on {new Date(plan.exam_date + 'T00:00:00').toLocaleDateString()} · {plan.hours_per_day}h/day</>
+              : <>{plan.hours_per_day}h/day</>}
           </p>
         </div>
         <div className="rounded-xl bg-slate-800 px-4 py-3 text-center">

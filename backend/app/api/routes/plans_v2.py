@@ -1,9 +1,11 @@
 import logging
 import asyncio
+import io
 import json
 from datetime import datetime
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Response, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Response, UploadFile, File, BackgroundTasks, Request, Form
+from app.limiter import limiter
 from fastapi.responses import StreamingResponse
 from pypdf import PdfReader
 from sqlalchemy import select, or_, func, delete
@@ -198,25 +200,50 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             await publish_progress(plan_id, "failed", status="failed", error=str(e))
 
 
+def generate_plan_background_sync(plan_id_str: str, topic: str, num_concepts: int = 8, hours_per_day: int = 2):
+    """Synchronous entry point for RQ worker."""
+    import asyncio
+    from uuid import UUID
+    async def wrapper():
+        from app.services.cache_service import init_redis, close_redis
+        await init_redis()
+        try:
+            await generate_plan_background(UUID(plan_id_str), topic, num_concepts, hours_per_day)
+        finally:
+            await close_redis()
+            
+    asyncio.run(wrapper())
+
+
 @router.post("", response_model=CreatePlanResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/hour")
 async def create_plan_endpoint(
-    request: CreatePlanRequest,
-    background_tasks: BackgroundTasks,
+    request: Request,
+    payload: CreatePlanRequest,
     current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> CreatePlanResponse:
-    normalized = request.topic.strip().lower()
+    return await _create_plan_logic(payload=payload, current_user=current_user, db=db)
+
+
+async def _create_plan_logic(
+    payload: CreatePlanRequest,
+    current_user: dict | None,
+    db: AsyncSession,
+) -> CreatePlanResponse:
+    """Shared plan-creation logic used by both the topic endpoint and PDF upload."""
+    normalized = payload.topic.strip().lower()
     has_fixture = any(key in normalized or normalized in key for key in TOPIC_FIXTURES.keys())
     clerk_user_id = current_user["sub"] if current_user else None
     
     if has_fixture:
         # Load fixture data
-        fixture = get_fixture_for_topic(request.topic)
+        fixture = get_fixture_for_topic(payload.topic)
         plan = await PlanRepository.create_plan(
             db,
-            topic=fixture.get("topic", request.topic),
-            exam_date=request.exam_date,
-            hours_per_day=request.hours_per_day,
+            topic=fixture.get("topic", payload.topic),
+            exam_date=payload.exam_date,
+            hours_per_day=payload.hours_per_day,
             status="completed",
             clerk_user_id=clerk_user_id
         )
@@ -273,14 +300,14 @@ async def create_plan_endpoint(
     else:
         # Check cache
         num_concepts = 8
-        cached = await get_plan_cache(request.topic, num_concepts)
+        cached = await get_plan_cache(payload.topic, num_concepts)
         if cached is not None:
-            logger.info(f"Cache hit for topic '{request.topic}'! Building plan instantly.")
+            logger.info(f"Cache hit for topic '{payload.topic}'! Building plan instantly.")
             plan = await PlanRepository.create_plan(
                 db,
-                topic=request.topic,
-                exam_date=request.exam_date,
-                hours_per_day=request.hours_per_day,
+                topic=payload.topic,
+                exam_date=payload.exam_date,
+                hours_per_day=payload.hours_per_day,
                 status="completed",
                 clerk_user_id=clerk_user_id
             )
@@ -333,19 +360,20 @@ async def create_plan_endpoint(
         # Cache miss -> Create a pending generation plan and start background worker
         plan = await PlanRepository.create_plan(
             db,
-            topic=request.topic,
-            exam_date=request.exam_date,
-            hours_per_day=request.hours_per_day,
+            topic=payload.topic,
+            exam_date=payload.exam_date,
+            hours_per_day=payload.hours_per_day,
             status="generating",
             clerk_user_id=clerk_user_id
         )
         await db.commit()
-        background_tasks.add_task(
-            generate_plan_background,
-            plan.id,
-            request.topic,
+        from app.worker import queue
+        queue.enqueue(
+            generate_plan_background_sync,
+            str(plan.id),
+            payload.topic,
             num_concepts,
-            hours_per_day=request.hours_per_day
+            payload.hours_per_day
         )
         return CreatePlanResponse(id=plan.id)
 
@@ -866,11 +894,12 @@ async def get_concept_content_endpoint(
     )
 
 @router.post("/upload-syllabus", response_model=CreatePlanResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/hour")
 async def upload_syllabus(
-    background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
-    exam_date: str = "",
-    hours_per_day: int = 2,
+    exam_date: str = Form(""),
+    hours_per_day: int = Form(2),
     current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> CreatePlanResponse:
@@ -879,22 +908,36 @@ async def upload_syllabus(
 
     try:
         pdf_content = await file.read()
-        reader = PdfReader(stream=pdf_content)
+        reader = PdfReader(io.BytesIO(pdf_content))
+
+        # Check for selectable text layer
+        text = ""
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text += t
+        if not text.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="NON_SEARCHABLE_PDF"
+            )
+
         topic = file.filename.replace('.pdf', '').strip()
 
         if not topic:
             raise HTTPException(status_code=400, detail="Could not extract topic from filename")
 
-        request = CreatePlanRequest(
+        payload = CreatePlanRequest(
             topic=topic,
             exam_date=exam_date if exam_date else None,
             hours_per_day=hours_per_day,
         )
-        return await create_plan_endpoint(request, background_tasks, current_user, db)
+        return await _create_plan_logic(payload=payload, current_user=current_user, db=db)
 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to process PDF: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Failed to process PDF: {str(e)}")
 
 

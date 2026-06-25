@@ -6,6 +6,12 @@ import type {
   ScheduleItem,
   DueReviewItem,
   AnalyticsData,
+  LibraryPlanItem,
+  ForkResponse,
+  TutorChatMessage,
+  QuizGradeRequest,
+  QuizGradeResponse,
+  LearningProfile,
 } from '../types'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -227,4 +233,177 @@ export function getAnalytics(planId: string, token?: string | null): Promise<Ana
     headers['Authorization'] = `Bearer ${token}`
   }
   return request<AnalyticsData>(`${API_PREFIX}/${planId}/analytics`, { headers })
+}
+
+export function publishPlan(
+  planId: string,
+  token?: string | null
+): Promise<{ plan_id: string; is_public: boolean; action: string }> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<{ plan_id: string; is_public: boolean; action: string }>(
+    `/api/v2/plans/${planId}/publish`,
+    {
+      method: 'POST',
+      headers,
+    }
+  )
+}
+
+export function forkPlan(
+  planId: string,
+  token?: string | null
+): Promise<ForkResponse> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<ForkResponse>(`/api/v2/plans/${planId}/fork`, {
+    method: 'POST',
+    headers,
+  })
+}
+
+export function getLibrary(
+  q?: string,
+  sort: 'newest' | 'oldest' = 'newest',
+  limit = 20,
+  offset = 0,
+  token?: string | null
+): Promise<LibraryPlanItem[]> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  const params = new URLSearchParams()
+  if (q) params.append('q', q)
+  params.append('sort', sort)
+  params.append('limit', String(limit))
+  params.append('offset', String(offset))
+
+  return request<LibraryPlanItem[]>(`/api/v2/library?${params.toString()}`, {
+    headers,
+  })
+}
+
+export function getConceptProfile(
+  planId: string,
+  conceptId: string,
+  token?: string | null
+): Promise<LearningProfile> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<LearningProfile>(
+    `/api/v2/plans/${planId}/concepts/${conceptId}/profile`,
+    { headers }
+  )
+}
+
+export function getChatHistory(
+  planId: string,
+  conceptId: string,
+  token?: string | null
+): Promise<TutorChatMessage[]> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<TutorChatMessage[]>(
+    `/api/v2/plans/${planId}/concepts/${conceptId}/chat`,
+    { headers }
+  )
+}
+
+export function chatWithTutor(
+  planId: string,
+  conceptId: string,
+  message: string,
+  token?: string | null
+): Promise<{ reply: string }> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<{ reply: string }>(
+    `/api/v2/plans/${planId}/concepts/${conceptId}/chat`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message }),
+    }
+  )
+}
+
+export function gradeQuizResponse(
+  planId: string,
+  conceptId: string,
+  req: QuizGradeRequest,
+  token?: string | null
+): Promise<QuizGradeResponse> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<QuizGradeResponse>(
+    `/api/v2/plans/${planId}/concepts/${conceptId}/quiz/grade`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req),
+    }
+  )
+}
+
+export function getEdgeExplanation(
+  fromConceptId: string,
+  toConceptId: string,
+  token?: string | null
+): Promise<{ explanation: string }> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<{ explanation: string }>(
+    `/api/v2/plans/edges/explanation?from_concept_id=${fromConceptId}&to_concept_id=${toConceptId}`,
+    { headers }
+  )
+}
+
+export function getWeeklyReport(
+  planId: string,
+  token?: string | null
+): Promise<{
+  concepts_mastered: number
+  total_concepts: number
+  average_confidence: number
+  weaknesses: string[]
+  recommendation: string
+}> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<any>(`/api/v2/plans/${planId}/weekly-report`, { headers })
+}
+
+export function getBenchmarkAnalytics(
+  token?: string | null
+): Promise<{
+  total_requests: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_cost_usd: number
+  average_latency_ms: number
+  cache_hit_rate_percent: number
+  stage_timings: Record<string, { avg_latency_ms: number; count: number }>
+}> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<any>(`/api/v2/plans/analytics/benchmarks`, { headers })
 }

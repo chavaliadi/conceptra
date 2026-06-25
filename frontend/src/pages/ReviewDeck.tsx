@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { getDueReviews, reviewConcept } from '../api/client'
 import type { DueReviewItem } from '../types'
 
 export default function ReviewDeck() {
   const { id } = useParams<{ id: string }>()
-  const { getToken, isSignedIn, isLoaded } = useAuth()
-  const navigate = useNavigate()
+  const { getToken, isLoaded } = useAuth()
 
   const [cards, setCards] = useState<DueReviewItem[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
