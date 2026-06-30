@@ -15,12 +15,14 @@ import type {
 } from '../types'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const { headers, ...restOptions } = options || {}
+  const isMultipart = restOptions.body instanceof FormData
   const response = await fetch(path, {
     headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
+      ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
     },
-    ...options,
+    ...restOptions,
   })
 
   if (!response.ok) {

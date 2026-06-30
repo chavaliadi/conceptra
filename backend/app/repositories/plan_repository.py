@@ -12,14 +12,16 @@ class PlanRepository:
         exam_date = None,
         hours_per_day: int = 2,
         status: str = "active",
-        clerk_user_id: str | None = None
+        clerk_user_id: str | None = None,
+        **kwargs
     ) -> Plan:
         plan = Plan(
             topic=topic.strip(),
             exam_date=exam_date,
             hours_per_day=hours_per_day,
             status=status,
-            clerk_user_id=clerk_user_id
+            clerk_user_id=clerk_user_id,
+            **kwargs
         )
         db.add(plan)
         await db.flush() # get plan.id

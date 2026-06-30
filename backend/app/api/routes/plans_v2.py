@@ -50,7 +50,13 @@ async def publish_progress(plan_id: UUID, stage: str, status: str = "generating"
         except Exception as e:
             logger.warning(f"Failed to publish progress for plan {plan_id}: {e}")
 
-async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int = 8, hours_per_day: int = 2):
+async def generate_plan_background(
+    plan_id: UUID, 
+    topic: str, 
+    num_concepts: int = 8, 
+    hours_per_day: int = 2,
+    syllabus_text: str | None = None
+):
     """Background task to run the 4-stage AI pipeline, save to DB, and store in Redis."""
     async with AsyncSessionLocal() as db:
         try:
@@ -58,17 +64,35 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             await publish_progress(plan_id, "generating_concepts", message="Extracting core concepts from curriculum...")
             
             # Stage 1: Concept Extraction
-            concepts = await ai_service.extract_concepts(topic, num_concepts)
+            concepts_response = await ai_service.extract_concepts(topic, num_concepts, syllabus_text)
+            concepts = concepts_response.concepts
+            
+            # If syllabus was parsed, update plan domain and book sources
+            plan = await PlanRepository.get_by_id(db, plan_id)
+            if plan:
+                if concepts_response.subject_domain:
+                    plan.subject_domain = concepts_response.subject_domain
+                if concepts_response.source_books:
+                    plan.source_books = [b.model_dump() for b in concepts_response.source_books]
+                await db.flush()
             
             # Maps string IDs from the LLM (e.g. c1) to database UUIDs
             id_map: dict[str, UUID] = {}
             
             # Insert concepts
             for c in concepts:
+                source_hints_dicts = [sh.model_dump() for sh in c.source_hint] if c.source_hint else None
+                rec_read_dicts = [rr.model_dump() for rr in c.recommended_reading] if c.recommended_reading else None
                 concept = Concept(
                     plan_id=plan_id,
                     name=c.name,
-                    description=c.description
+                    description=c.description,
+                    difficulty=c.difficulty,
+                    difficulty_source="llm_assigned",
+                    content_generation_version=1,
+                    source_hint=source_hints_dicts,
+                    recommended_reading=rec_read_dicts,
+                    is_inferred_reading=c.is_inferred_reading
                 )
                 db.add(concept)
                 await db.flush()
@@ -84,14 +108,31 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             
             # Stage 2: Dependency Graph
             edges = await ai_service.build_graph(concepts)
+            
+            # Cycle check/verification using networkx on insert
+            import networkx as nx
+            G = nx.DiGraph()
+            for c_id in id_map.values():
+                G.add_node(c_id)
+                
             for e in edges:
                 from_uuid = id_map.get(e.from_id)
                 to_uuid = id_map.get(e.to_id)
                 if from_uuid and to_uuid:
+                    if from_uuid == to_uuid:
+                        continue  # Skip self-loops
+                    G.add_edge(from_uuid, to_uuid)
+                    if not nx.is_directed_acyclic_graph(G):
+                        G.remove_edge(from_uuid, to_uuid)
+                        logger.warning(f"Cycle detected for edge {from_uuid} -> {to_uuid}! Edge rejected.")
+                        continue
+                    
                     edge = Edge(
                         plan_id=plan_id,
                         from_concept_id=from_uuid,
-                        to_concept_id=to_uuid
+                        to_concept_id=to_uuid,
+                        confidence=e.confidence,
+                        source=e.source
                     )
                     db.add(edge)
                     
@@ -139,12 +180,23 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             await publish_progress(plan_id, "generating_content", message="Synthesizing explanation & resource guides...")
             
             # Stage 4: Content Generation
+            from app.core.platform_registry import resolve_resource_url
             content_items = await ai_service.generate_content(concepts)
             for item in content_items:
                 concept_uuid = id_map.get(item.concept_id)
                 if concept_uuid:
                     quiz_dicts = [q.model_dump() for q in item.quiz]
-                    res_dicts = [r.model_dump() for r in item.resources]
+                    
+                    # Resolve Resource Platforms & Queries to URLs
+                    res_dicts = []
+                    for r in item.resources:
+                        url = resolve_resource_url(r.type, r.platform, r.query)
+                        res_dicts.append({
+                            "type": r.type,
+                            "title": r.title,
+                            "url": url
+                        })
+                        
                     await ContentRepository.upsert_content(
                         db,
                         concept_id=concept_uuid,
@@ -158,7 +210,14 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
                     "concept_id": str(id_map[item.concept_id]),
                     "explanation": item.explanation,
                     "quiz": [q.model_dump() for q in item.quiz],
-                    "resources": [r.model_dump() for r in item.resources]
+                    "resources": [
+                        {
+                            "type": r.type,
+                            "title": r.title,
+                            "url": resolve_resource_url(r.type, r.platform, r.query)
+                        }
+                        for r in item.resources
+                    ]
                 }
                 for item in content_items if item.concept_id in id_map
             }
@@ -174,24 +233,32 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             logger.info(f"Successfully generated plan {plan_id} in background")
             await publish_progress(plan_id, "completed", status="completed")
             
-            # Save to Redis Cache
-            try:
-                cache_payload = {
-                    "concepts": [{"id": c.id, "name": c.name, "description": c.description} for c in concepts],
-                    "edges": [{"from_id": e.from_id, "to_id": e.to_id} for e in edges],
-                    "schedule": [{"concept_id": s.concept_id, "week": s.week, "day": s.day, "priority": s.priority} for s in schedule_items],
-                    "content": {
-                        item.concept_id: {
-                            "explanation": item.explanation,
-                            "quiz": [q.model_dump() for q in item.quiz],
-                            "resources": [r.model_dump() for r in item.resources]
+            # Save to Redis Cache (only if not syllabus upload)
+            if not syllabus_text:
+                try:
+                    cache_payload = {
+                        "concepts": [{"id": c.id, "name": c.name, "description": c.description} for c in concepts],
+                        "edges": [{"from_id": e.from_id, "to_id": e.to_id} for e in edges],
+                        "schedule": [{"concept_id": s.concept_id, "week": s.week, "day": s.day, "priority": s.priority} for s in schedule_items],
+                        "content": {
+                            item.concept_id: {
+                                "explanation": item.explanation,
+                                "quiz": [q.model_dump() for q in item.quiz],
+                                "resources": [
+                                    {
+                                        "type": r.type,
+                                        "title": r.title,
+                                        "url": resolve_resource_url(r.type, r.platform, r.query)
+                                    }
+                                    for r in item.resources
+                                ]
+                            }
+                            for item in content_items
                         }
-                        for item in content_items
                     }
-                }
-                await set_plan_cache(topic, num_concepts, cache_payload)
-            except Exception as cache_err:
-                logger.warning(f"Failed to cache generated plan: {cache_err}")
+                    await set_plan_cache(topic, num_concepts, cache_payload)
+                except Exception as cache_err:
+                    logger.warning(f"Failed to cache generated plan: {cache_err}")
             
         except Exception as e:
             logger.error(f"Failed to generate plan {plan_id} in background: {e}", exc_info=True)
@@ -200,7 +267,7 @@ async def generate_plan_background(plan_id: UUID, topic: str, num_concepts: int 
             await publish_progress(plan_id, "failed", status="failed", error=str(e))
 
 
-def generate_plan_background_sync(plan_id_str: str, topic: str, num_concepts: int = 8, hours_per_day: int = 2):
+def generate_plan_background_sync(plan_id_str: str, topic: str, num_concepts: int = 8, hours_per_day: int = 2, syllabus_text: str | None = None):
     """Synchronous entry point for RQ worker."""
     import asyncio
     from uuid import UUID
@@ -209,7 +276,7 @@ def generate_plan_background_sync(plan_id_str: str, topic: str, num_concepts: in
         from app.database import close_db
         await init_redis()
         try:
-            await generate_plan_background(UUID(plan_id_str), topic, num_concepts, hours_per_day)
+            await generate_plan_background(UUID(plan_id_str), topic, num_concepts, hours_per_day, syllabus_text)
         finally:
             try:
                 await close_db()
@@ -235,6 +302,7 @@ async def _create_plan_logic(
     payload: CreatePlanRequest,
     current_user: dict | None,
     db: AsyncSession,
+    syllabus_text: str | None = None,
 ) -> CreatePlanResponse:
     """Shared plan-creation logic used by both the topic endpoint and PDF upload."""
     normalized = payload.topic.strip().lower()
@@ -303,9 +371,12 @@ async def _create_plan_logic(
         await db.commit()
         return CreatePlanResponse(id=plan.id)
     else:
-        # Check cache
+        # Check cache (only if not syllabus upload)
         num_concepts = 8
-        cached = await get_plan_cache(payload.topic, num_concepts)
+        cached = None
+        if not syllabus_text:
+            cached = await get_plan_cache(payload.topic, num_concepts)
+            
         if cached is not None:
             logger.info(f"Cache hit for topic '{payload.topic}'! Building plan instantly.")
             plan = await PlanRepository.create_plan(
@@ -369,7 +440,8 @@ async def _create_plan_logic(
             exam_date=payload.exam_date,
             hours_per_day=payload.hours_per_day,
             status="generating",
-            clerk_user_id=clerk_user_id
+            clerk_user_id=clerk_user_id,
+            raw_text=syllabus_text
         )
         await db.commit()
         from app.worker import queue
@@ -378,7 +450,8 @@ async def _create_plan_logic(
             str(plan.id),
             payload.topic,
             num_concepts,
-            payload.hours_per_day
+            payload.hours_per_day,
+            syllabus_text
         )
         return CreatePlanResponse(id=plan.id)
 
@@ -937,7 +1010,7 @@ async def upload_syllabus(
             exam_date=exam_date if exam_date else None,
             hours_per_day=hours_per_day,
         )
-        return await _create_plan_logic(payload=payload, current_user=current_user, db=db)
+        return await _create_plan_logic(payload=payload, current_user=current_user, db=db, syllabus_text=text)
 
     except HTTPException:
         raise

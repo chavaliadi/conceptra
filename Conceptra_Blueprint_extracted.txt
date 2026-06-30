@@ -1,0 +1,177 @@
+Project Blueprint
+Conceptra
+Adithya Chavali  ·  Intermediate  ·  3–4 Weeks
+AI Pipeline Design  ·  Full-Stack  ·  Graph UI
+What this document covers
+A complete working reference for building Conceptra from scratch. Covers the product idea, why it matters for your portfolio, full tech stack, the AI pipeline architecture in depth, week-by-week build plan, what you will learn, and how to make it stand out on GitHub and in interviews.
+Conceptra in one sentence: Paste any topic or upload a syllabus → get a structured concept dependency graph, adaptive study schedule, per-concept explanations, quizzes, and resources — all in one shareable link.
+01
+What it is & why it matters
+Conceptra is a study intelligence tool for students. A student inputs a topic ("Operating Systems", "Thermodynamics", "System Design") or uploads a syllabus PDF and tells Conceptra their exam date. The system runs a four-step AI pipeline that extracts all concepts, builds a dependency graph showing which concepts must be understood before others, generates a week-by-week study schedule calibrated to the deadline, and produces per-concept content: a plain-English explanation, practice questions, and curated resource links.
+Progress is tracked interactively. The student marks concepts as learned, struggling, or skipped. If too many are marked struggling, the plan automatically redistributes time. Everything lives at a shareable UUID-based URL — no login required, but the plan persists indefinitely in PostgreSQL.
+The concept dependency graph is the heart of the product. Getting AI to not just list topics but understand that "you cannot learn virtual memory before you understand paging" — and expressing that as a validated graph structure — is the technically interesting problem that separates Conceptra from every generic flashcard or quiz app.
+Why this is the right project for you right now
+It is not on any "top 20 beginner projects" list.
+The AI Flashcard Generator — which your friend is building — is one prompt, one output. Conceptra is a four-step chained pipeline with dependency graph construction, topological ordering, structured JSON validation with retry logic, adaptive replanning, and a React Flow graph UI. The learning gap between those two is the difference between calling an API and understanding how AI pipelines are actually built.
+Teaches multi-step AI pipeline design — the most in-demand AI engineering skill right now.
+React Flow (interactive node graphs) is a rare frontend skill that makes your demo visually striking and technically credible.
+Structured JSON output validation with retry logic is real production AI thinking that most students never touch.
+No auth means you can build the entire thing in 3 weeks without losing a week to session management.
+Students will actually use it — which means real usage, possible GitHub stars, and a live demo with real data during interviews.
+02
+Tech stack
+FastAPI (Python)
+PostgreSQL
+Redis
+Claude API
+sentence-transformers
+pdfplumber
+React + Tailwind
+React Flow
+Zustand
+Docker
+Railway
+Vercel
+Why each tool
+FastAPI — Your existing stack. Async endpoints handle the multi-step pipeline without blocking. Pydantic models enforce the JSON schema validation you need for structured AI outputs.
+PostgreSQL — Stores plans as JSONB (the full concept graph, schedule, and per-concept content in one column). UUID primary keys double as shareable URL tokens. No separate auth table needed.
+Redis — Caches the concept graph for popular topics. "Operating Systems" will be requested by hundreds of students — cache the skeleton, only regenerate the personalised deadline schedule per request. Teaches you when and what to cache.
+React Flow — Renders the concept dependency graph as an interactive node diagram. Click a node to open its content panel. Mark it done and it turns green; dependent nodes visually unlock. This is your demo moment.
+Zustand — Manages progress state across the graph (learned / struggling / skipped per concept) without prop drilling. Persists to localStorage so progress survives page refresh.
+pdfplumber — Extracts text from uploaded syllabi. Handles multi-column layouts and table-structured syllabi better than PyMuPDF for this use case.
+03
+The AI pipeline — in depth
+This is the core of Conceptra and the most important thing to understand before you write a single line of code. Most AI apps make one API call and render the result. Conceptra makes four sequential calls where the output of each becomes the input of the next. Each call has a strict expected output schema. If the schema is wrong, the system retries with a correction prompt. This is how production AI pipelines are built.
+Step
+Prompt goal
+Output shape
+1
+Concept extraction
+Given a topic or extracted syllabus text, return every concept that needs to be learned as a flat JSON array with name and one-sentence description
+{ concepts: [{ id, name, description }] }
+2
+Dependency graph
+Given the concept list, determine which concepts are prerequisites for others. Return edges as a directed graph. A concept with no prerequisites has an empty array.
+{ edges: [{ from_id, to_id }] }
+3
+Study schedule
+Given the graph (topologically sorted) and the exam date, distribute concepts across available days. Earlier concepts in the dependency chain appear in earlier weeks.
+{ schedule: [{ concept_id, week, day, priority }] }
+4
+Per-concept content
+For each concept, generate a plain-English explanation (150 words), three quiz questions (2 MCQ + 1 short answer), and three resource suggestions (type: video/docs/article).
+{ explanation, quiz: [...], resources: [...] }
+Structured output validation — the hard part
+Every single Claude call must return valid JSON matching a Pydantic schema. In production, LLMs occasionally return markdown fences around JSON, miss a field, or return a string where an array is expected. You cannot let that crash your pipeline silently. Here is how you handle it:
+Step 1 — Strip and parse: Strip any markdown code fences (```json ... ```) before parsing. Try json.loads(). If it fails, go to step 2.
+Step 2 — Pydantic validation: Pass the parsed dict into your Pydantic model. If validation fails (missing field, wrong type), capture the validation error message.
+Step 3 — Correction prompt: Retry the call with the original prompt PLUS the failed output PLUS the error message: "Your previous response had this issue: [error]. Return corrected JSON only, no markdown, no explanation."
+Step 4 — Max retries: After 3 failed attempts, raise a pipeline error and return a user-facing message. Do not silently fail or return partial data.
+Why dependency ordering matters
+The concept graph must be a Directed Acyclic Graph (DAG) — no circular dependencies. Before scheduling, run a topological sort on the graph. This guarantees that concept A always appears in the schedule before any concept that depends on A. If the AI returns a cycle (rare but possible), detect it with a cycle check and ask Claude to resolve it in a correction prompt. Understanding topological sort — not just importing a library but knowing why it exists — is a data structures concept that will come up in interviews.
+Adaptive replanning
+When a student marks 3 or more concepts as "struggling", trigger a replanning call. Send Claude the current schedule, the struggling concepts, the remaining days until the exam, and a prompt to redistribute time — giving more days to struggling concepts and their dependents, compressing concepts already marked as learned. This is not a new pipeline run. It is a single targeted call that returns a diff of the schedule, not the full plan. Applying a diff rather than replacing the whole plan is an important distinction that teaches you about partial updates in stateful systems.
+04
+Database schema
+Conceptra needs three tables. Keep it lean — the JSONB approach means you do not need a separate table for every concept, edge, or quiz question.
+plans
+id  UUID  PRIMARY KEY  DEFAULT gen_random_uuid()
+topic  TEXT  NOT NULL  — the subject the student entered
+exam_date  DATE  NOT NULL
+graph  JSONB  NOT NULL  — full concept list + dependency edges
+schedule  JSONB  NOT NULL  — week/day assignments per concept
+content  JSONB  NOT NULL  — explanations, quizzes, resources per concept
+created_at  TIMESTAMP  DEFAULT now()
+last_accessed  TIMESTAMP  — updated on each visit for cleanup logic
+progress
+id  UUID  PRIMARY KEY
+plan_id  UUID  REFERENCES plans(id)
+concept_id  TEXT  — matches id field from graph JSONB
+status  TEXT  CHECK IN (learned, struggling, skipped, untouched)
+updated_at  TIMESTAMP
+cache
+This is handled in Redis, not PostgreSQL. Key: topic_slug (e.g. "operating-systems"). Value: the graph + content JSON. TTL: 7 days. When a new plan is created, check Redis first before hitting the AI pipeline. Saves API cost and speeds up response time dramatically for common topics.
+05
+Frontend architecture
+The frontend has three views. Keep each one focused — do not overload a single page with every feature.
+View 1 — Landing / Input
+Clean input form: topic text field OR PDF upload toggle
+Exam date picker
+Estimated study hours per day slider (1–8 hours)
+On submit: POST /api/plans → show a loading state with streaming progress messages ("Extracting concepts...", "Building dependency graph...", "Generating schedule...")
+On completion: redirect to /plan/:uuid
+View 2 — The concept graph (React Flow)
+React Flow renders the DAG. Each node = one concept. Edges show dependencies.
+Node colours: untouched (gray), learned (green), struggling (amber), skipped (red)
+Click a node: right panel opens with explanation, quiz questions, resource links
+Top bar: exam countdown, overall progress bar (X of Y concepts learned), replan button
+Zustand manages all progress state. Persists to localStorage so refresh does not lose progress.
+Schedule view toggle: switch between graph view and a week-by-week calendar view
+View 3 — Per-concept panel (right drawer)
+Concept name + one-sentence description at top
+Plain-English explanation (rendered as markdown)
+Quiz section: MCQ with selectable options, short answer with reveal button
+Resources: card list with icon (video/docs/article), title, and link
+Status buttons at bottom: Mark as Learned / Struggling / Skip
+If marked Struggling and total struggling count >= 3: show "Replan" prompt banner
+06
+Week-by-week build plan
+Wk
+Phase
+What to build
+1
+AI pipeline core
+FastAPI project setup, Pydantic schemas for all 4 pipeline steps, Claude API integration, JSON validation + retry logic, PostgreSQL schema + JSONB storage, UUID plan creation, GET /plan/:uuid endpoint returning full plan data, test pipeline end to end with 3 different topics
+2
+Frontend + React Flow
+React project setup with Tailwind, landing page with topic input + PDF upload + exam date, POST to API + loading state with streaming progress messages, React Flow concept graph (nodes + edges), node colour states, Zustand progress store with localStorage persistence, per-concept right drawer panel (explanation + quiz + resources)
+3
+Adaptive replanning + polish
+Replan endpoint (partial schedule diff), Redis caching for popular topics, week-by-week calendar view toggle, PDF text extraction with pdfplumber, shareable URL copy button, Docker setup for local dev (FastAPI + PostgreSQL + Redis), deploy FastAPI to Railway + React to Vercel
+4
+Stretch + documentation
+Streaming plan generation (SSE so UI populates live concept by concept), resource link validation (check links are not 404), README with architecture diagram + live demo GIF, record 90-second demo video, write a short technical writeup explaining the pipeline design decisions
+Note on timing: Week 4 is a stretch week. If you finish weeks 1–3 cleanly with a live deployed demo, the project is already portfolio-ready. Use week 4 to polish rather than add features. A well-documented, deployed, working app beats a feature-heavy broken one every time.
+07
+What you will actually learn
+✓  Multi-step AI prompt chaining
+✓  Structured JSON output + Pydantic validation
+✓  Retry logic for AI pipeline failures
+✓  Graph data structures (DAG) in practice
+✓  Topological sort — why and how
+✓  React Flow for interactive node graphs
+✓  Redis caching strategy (when + what to cache)
+✓  JSONB in PostgreSQL for nested data
+✓  Streaming AI responses with SSE
+✓  PDF text extraction pipeline
+✓  Adaptive replanning with partial diffs
+✓  UUID-based shareable sessions (no auth)
+✓  Zustand state management at scale
+✓  FastAPI async endpoints for long pipelines
+✓  Docker multi-service local development
+✓  Production deployment (Railway + Vercel)
+08
+How to make it stand out
+On GitHub
+Architecture diagram in the README showing the four-step pipeline as a flow: Input → Concept Extraction → Dependency Graph → Schedule Generation → Content Generation → Frontend. Make this a proper diagram, not a text list.
+Include a benchmarks section: average pipeline time per topic, cache hit rate for popular topics, p95 plan generation time. Numbers make backend projects credible.
+Write a "Design decisions" section explaining why you used JSONB over a relational schema for concepts, why you chose Redis TTL of 7 days, and how you handle AI validation failures. This shows you think about tradeoffs, not just implementation.
+Tag a v1.0 release once the core is working. A release history signals a maintained, serious project.
+For the demo
+Record a 90-second screen recording: type "Operating Systems", set exam date 3 weeks out, watch the graph populate live (streaming), click a node, answer a quiz question, mark one as struggling, hit replan and watch the schedule shift. That sequence shows every feature in under 2 minutes.
+Deploy it. A live URL beats a local demo every single time. If someone can try it themselves at 2am before an interview, they will.
+Add 3–4 pre-built example plans (Operating Systems, React Fundamentals, System Design, Machine Learning Basics) that load instantly from Redis cache. This ensures the demo always works even if the AI pipeline is slow.
+On your resume
+Bullet 1 — Engineering: "Engineered a 4-step AI pipeline (concept extraction → dependency graph → schedule generation → content synthesis) with structured JSON output validation and automatic retry logic."
+Bullet 2 — Scale: "Implemented Redis caching for popular topics reducing average plan generation time by 80%, serving cached concept graphs to repeat users instantly."
+Bullet 3 — Product: "Built interactive concept dependency graph using React Flow with adaptive replanning — automatically redistributes study schedule when students flag struggling concepts."
+09
+Summary
+Project  Conceptra
+Difficulty  Intermediate
+Realistic timeline  3–4 weeks (possibly 5 if balancing coursework)
+Core skill taught  Multi-step AI pipeline design with structured outputs
+Visual differentiator  React Flow concept dependency graph — nothing else in your portfolio looks like this
+Auth required  No — UUID shareable links, full persistence, zero login friction
+Useful to others  Yes — students with any exam, any subject, any deadline
+Build order for your full roadmap:  DevLog  →  Conceptra  →  VectorVault

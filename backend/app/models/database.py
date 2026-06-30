@@ -48,6 +48,11 @@ class Plan(Base):
         ForeignKey("plans.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Layer 1 additions
+    subject_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_books: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -70,6 +75,9 @@ class Plan(Base):
     )
     schedule_history: Mapped[list["ScheduleHistory"]] = relationship(
         "ScheduleHistory", back_populates="plan", cascade="all, delete-orphan"
+    )
+    quiz_attempts: Mapped[list["QuizAttempt"]] = relationship(
+        "QuizAttempt", back_populates="plan", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -98,6 +106,15 @@ class Concept(Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Layer 1 additions
+    difficulty: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
+    difficulty_source: Mapped[str] = mapped_column(String(50), nullable=False, default="llm_assigned")
+    content_generation_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source_hint: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_inferred_reading: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recommended_reading: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -121,6 +138,9 @@ class Concept(Base):
     )
     progress: Mapped[list["Progress"]] = relationship(
         "Progress", back_populates="concept", cascade="all, delete-orphan"
+    )
+    quiz_attempts: Mapped[list["QuizAttempt"]] = relationship(
+        "QuizAttempt", back_populates="concept", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -150,6 +170,10 @@ class Edge(Base):
         ForeignKey("concepts.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Layer 1 additions
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="llm_inferred")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -231,6 +255,13 @@ class Progress(Base):
     ease_factor: Mapped[float] = mapped_column(Float, nullable=False, default=2.5)
     repetitions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Layer 2 Student mastery additions
+    mastery_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    retention_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    attempts_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     plan: Mapped["Plan"] = relationship("Plan", back_populates="progress")
     concept: Mapped["Concept"] = relationship("Concept", back_populates="progress")
@@ -243,6 +274,43 @@ class Progress(Base):
         ),
         Index("idx_progress_plan_concept", "plan_id", "concept_id"),
         Index("idx_progress_next_review", "next_review_at"),
+    )
+
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    plan_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("plans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    concept_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("concepts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list] = mapped_column(JSONB, nullable=False)
+    correct_option_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected_option_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    confidence_reported: Mapped[float] = mapped_column(Float, nullable=False)
+    response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    answered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    plan: Mapped["Plan"] = relationship("Plan", back_populates="quiz_attempts")
+    concept: Mapped["Concept"] = relationship("Concept", back_populates="quiz_attempts")
+
+    __table_args__ = (
+        Index("idx_quiz_attempts_plan_id", "plan_id"),
+        Index("idx_quiz_attempts_concept_id", "concept_id"),
     )
 
 

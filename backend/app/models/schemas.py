@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -143,6 +143,7 @@ class QuizGradeRequest(BaseModel):
     question_text: str
     student_answer: str
     correct_answer: str
+    confidence_reported: Optional[float] = None
 
 
 class QuizGradeResponse(BaseModel):

@@ -1,13 +1,14 @@
 import logging
 from uuid import UUID
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes.deps import get_required_user
 from app.database import get_db
-from app.models.database import Concept, ConceptContent, Edge, Plan
+from app.models.database import Concept, ConceptContent, Edge, Plan, Progress, QuizAttempt
 from app.models.learning_intelligence import LearningProfile, StudentMistake, TutorChatMessage
 from app.models.schemas import (
     ChatMessageResponse,
@@ -18,6 +19,7 @@ from app.models.schemas import (
     QuizGradeRequest,
     QuizGradeResponse,
 )
+from app.services.scheduler import calculate_blended_quality, update_sm2, calculate_mastery_delta
 from app.services.llm_provider import get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -280,17 +282,14 @@ Correct Answer: "{req.correct_answer}"
 
     # Perform mathematical profile updates
     if is_correct:
-        # Increase scores
         profile.mastery_score = min(100.0, profile.mastery_score + 35.0)
         profile.confidence_score = min(100.0, profile.confidence_score + 25.0)
         profile.retention_score = min(100.0, profile.retention_score + 20.0)
         profile.difficulty_score = max(0.0, profile.difficulty_score - 15.0)
         profile.recommended_action = "Concept understood. Move to next dependency."
     else:
-        # Decrease scores / log mistake
         profile.mastery_score = max(0.0, profile.mastery_score - 15.0)
         profile.confidence_score = max(0.0, profile.confidence_score - 15.0)
-        # Retention decreases slightly on mistake
         profile.retention_score = max(0.0, profile.retention_score - 5.0)
         profile.difficulty_score = min(100.0, profile.difficulty_score + 20.0)
         profile.recommended_action = "Review mistakes and read explanation again."
@@ -306,6 +305,60 @@ Correct Answer: "{req.correct_answer}"
         db.add(mistake)
 
     profile.last_review = func.now()
+
+    # Load Progress/Mastery record
+    stmt_progress = select(Progress).where(
+        Progress.plan_id == plan_id,
+        Progress.concept_id == concept_id
+    )
+    res_progress = await db.execute(stmt_progress)
+    progress_rec = res_progress.scalar_one_or_none()
+    
+    conf_reported = req.confidence_reported if req.confidence_reported is not None else 0.5
+    quality = calculate_blended_quality(is_correct, conf_reported)
+
+    if progress_rec:
+        new_reps, new_ef, new_interval = update_sm2(
+            progress_rec.repetitions,
+            progress_rec.ease_factor,
+            progress_rec.interval_days,
+            quality
+        )
+        
+        delta = calculate_mastery_delta(quality)
+        new_mastery = max(0.0, min(100.0, progress_rec.mastery_pct + delta))
+        
+        progress_rec.repetitions = new_reps
+        progress_rec.ease_factor = new_ef
+        progress_rec.interval_days = new_interval
+        progress_rec.mastery_pct = new_mastery
+        progress_rec.confidence_level = conf_reported
+        progress_rec.attempts_count += 1
+        progress_rec.last_reviewed_at = func.now()
+        progress_rec.next_review_at = func.now() + timedelta(days=new_interval)
+        progress_rec.retention_pct = 100.0
+        
+        if new_mastery >= 80.0:
+            progress_rec.status = "learned"
+        elif new_mastery < 40.0:
+            progress_rec.status = "struggling"
+        else:
+            progress_rec.status = "untouched"
+
+    # Save QuizAttempt log
+    quiz_attempt = QuizAttempt(
+        plan_id=plan_id,
+        concept_id=concept_id,
+        question_text=req.question_text,
+        options=[],
+        correct_option_index=-1,
+        selected_option_index=-1,
+        is_correct=is_correct,
+        confidence_reported=conf_reported,
+        response_time_ms=0,
+        answered_at=func.now()
+    )
+    db.add(quiz_attempt)
     await db.commit()
 
     return QuizGradeResponse(

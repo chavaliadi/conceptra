@@ -42,27 +42,61 @@ async def _handle_retry_sleep(attempt: int, error: Exception):
     logger.info(f"Rate limit hit. Sleeping for {sleep_time:.2f} seconds before retry attempt {attempt + 1}")
     await asyncio.sleep(sleep_time)
 
-async def extract_concepts(topic: str, num_concepts: int = 8) -> List[AIConceptItem]:
-    """Stage 1: Extract concepts from a topic with up to 3 retries."""
-    system_prompt = "You are an expert curriculum builder that output valid JSON matching the requested structure."
-    prompt = f"""
-    Extract a list of core concepts to study the topic: "{topic}".
-    You MUST return a JSON object with a single key "concepts" which is a list of objects.
-    Each object must have the following fields:
-    - "id": a temporary ID like "c1", "c2", "c3" (keep them sequential)
-    - "name": the name of the concept
-    - "description": a short 1-2 sentence description of the concept
+async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str | None = None) -> ExtractResponse:
+    """Stage 1: Extract concepts from a topic or syllabus text with up to 5 retries."""
+    system_prompt = "You are an expert curriculum builder that outputs valid JSON matching the requested structure."
+    
+    if syllabus_text:
+        prompt = f"""
+        You are parsing a course syllabus for the topic: "{topic}".
+        Analyze the following extracted syllabus text and extract a list of core concepts to study:
+        ---
+        {syllabus_text}
+        ---
 
-    Generate exactly {num_concepts} concepts.
-    """
+        You MUST return a JSON object with:
+        1. "subject_domain": Inferred overall subject domain (e.g. "Computer Networks").
+        2. "source_books": A list of primary textbooks, slide decks, or lecture note sources mentioned in the syllabus. Each source/book must be a JSON object with:
+           - "source": Textbook title or name of the source (e.g. "Data Communication & Networking", "Notes I shared").
+           - "chapter": Chapter number or section name if applicable (otherwise null).
+           - "edition": Edition number or version details if applicable (otherwise null).
+        3. "concepts": A list of exactly {num_concepts} objects representing the core study units from the syllabus. Each concept must have:
+           - "id": temporary sequential ID: "c1", "c2", "c3"...
+           - "name": clean, concise study unit name (e.g. "Error Detection & Correction" or "Physical Layer").
+           - "description": a short 1-2 sentence description.
+           - "difficulty": "easy", "medium", or "hard".
+           - "source_hint": a list of objects representing textbook/notes references from the syllabus matching this concept (e.g. [{{"source": "Forouzan", "chapter": "Chapter 10", "edition": "4th Edition"}}]).
+           - "recommended_reading": recommended readings (usually a list of objects matching the source_hint textbook references).
+           - "is_inferred_reading": false if book/reading references were detected, true if no book reference was found and reading is general knowledge reference.
+
+        Deduplicate concepts: if multiple textbook references cover the same concept (like Tanenbaum and Forouzan both covering "Paging"), combine them into one concept with multiple recommended_reading entries.
+        """
+    else:
+        prompt = f"""
+        Extract a list of core concepts to study the topic: "{topic}".
+        You MUST return a JSON object with:
+        1. "subject_domain": Inferred overall subject domain (e.g. "{topic}").
+        2. "source_books": null or an empty list.
+        3. "concepts": A list of exactly {num_concepts} objects. Each concept must have:
+           - "id": temporary sequential ID: "c1", "c2", "c3"...
+           - "name": clean, concise study unit name.
+           - "description": a short 1-2 sentence description.
+           - "difficulty": "easy", "medium", or "hard".
+           - "source_hint": null or an empty list.
+           - "recommended_reading": a list of objects representing general reference sources. Each object must contain:
+             - "source": Textbook title, domain or name of the source (e.g. "Python Documentation", "Python Crash Course").
+             - "chapter": null.
+             - "edition": null.
+           - "is_inferred_reading": true (since we do not have a syllabus).
+        """
     
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=600)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1000)
             # Validate with Pydantic
             validated = ExtractResponse.model_validate(result_json)
-            return validated.concepts
+            return validated
         except Exception as e:
             logger.warning(f"Stage 1 extraction attempt {attempt} failed: {e}")
             if attempt == 5:
@@ -70,8 +104,16 @@ async def extract_concepts(topic: str, num_concepts: int = 8) -> List[AIConceptI
             await _handle_retry_sleep(attempt, e)
 
 async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
-    """Stage 2: Build dependency edges between concepts with up to 3 retries (including DAG validation)."""
-    concepts_data = [{"id": c.id, "name": c.name, "description": c.description} for c in concepts]
+    """Stage 2: Build dependency edges between concepts with up to 5 retries (including DAG validation)."""
+    concepts_data = [
+        {
+            "id": c.id, 
+            "name": c.name, 
+            "description": c.description,
+            "difficulty": c.difficulty
+        } 
+        for c in concepts
+    ]
     concepts_json = json.dumps(concepts_data, indent=2)
     
     system_prompt = "You are a graph theory and curriculum routing expert. You output valid JSON."
@@ -84,6 +126,8 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     Each object must have:
     - "from_id": the ID of the prerequisite concept (e.g. "c1")
     - "to_id": the ID of the dependent concept (e.g. "c2")
+    - "confidence": confidence score (float between 0.0 and 1.0)
+    - "source": "llm_inferred"
 
     CRITICAL RULES:
     1. Do NOT create cycles. The graph must be a Directed Acyclic Graph (DAG).
@@ -94,7 +138,7 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=400)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=600)
             # Validate with Pydantic (which runs DAG cycle checking)
             validated = GraphResponse.model_validate(result_json)
             return validated.edges
@@ -105,30 +149,59 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
             await _handle_retry_sleep(attempt, e)
 
 async def generate_single_concept_content(concept: AIConceptItem) -> ConceptContentAI:
-    """Generate detailed explanation, quiz, and resources for a single concept with up to 3 retries."""
+    """Generate detailed explanation, quiz, and resources for a single concept with up to 5 retries."""
     system_prompt = "You are an elite technical educator who creates high-quality learning content and outputs JSON."
+    
+    # Format readings if available
+    readings_str = ""
+    if concept.recommended_reading:
+        readings_str = "\n".join([f"* {r.source}: Chapter {r.chapter or ''}" for r in concept.recommended_reading])
+    else:
+        readings_str = "* General reference resources."
+
     prompt = f"""
-    Generate a detailed explanation, quiz, and resources for the following concept:
+    Generate detailed explanation, quiz, and resources for the following concept:
     ID: {concept.id}
     Name: {concept.name}
     Description: {concept.description}
-
-    You MUST generate:
-    1. "explanation": A detailed, clear explanation (2-3 sentences) explaining the core concept.
-    2. "quiz": A list of exactly 3 quiz questions. The first 2 must be multiple-choice ("type": "mcq") with an "options" list of 4 options and the correct "answer" matching one of the options. The 3rd question must be a short-answer question ("type": "short_answer") with no options and a sample correct "answer".
-    3. "resources": A list of 2-3 study resources. Each must have "type" ("video", "docs", or "article"), a "title", and a "url" (use realistic educational domains like youtube.com, wikipedia.org, or docs.python.org).
+    Difficulty: {concept.difficulty}
+    Recommended Readings:
+    {readings_str}
 
     You MUST return a JSON object with the following fields:
-    - "concept_id": Must be "{concept.id}"
-    - "explanation": the explanation string
-    - "quiz": the list of 3 questions
-    - "resources": the list of resources
+    1. "concept_id": Must be "{concept.id}"
+    2. "explanation": A detailed, markdown-formatted study guide. It MUST contain the following sections:
+       ### Concept Explanation
+       [detailed 2-3 sentence explanation of the concept]
+       
+       💡 **Analogy:**
+       [a relatable, memorable real-world analogy to help the student understand the concept]
+       
+       🌐 **Real-World Example:**
+       [an actual engineering, programming, or network design implementation where this is used]
+       
+       🎯 **Exam Tip:**
+       [direct exam advice, common exam questions, or mathematical formulas they must memorize]
+       
+       ⚠️ **Frequently Confused With:**
+       [what this concept is commonly mistaken for, and the key difference, e.g. CSMA/CD vs CSMA/CA]
+       
+       📚 **Recommended Reading:**
+       {readings_str}
+       
+    3. "quiz": A list of exactly 3 quiz questions. The first 2 must be multiple-choice ("type": "mcq") with an "options" list of 4 options and the correct "answer" matching one of the options. The 3rd question must be a short-answer question ("type": "short_answer") with no options and a sample correct "answer".
+    4. "resources": A list of exactly 2-3 study resources. Each resource MUST have:
+       - "type": "video", "docs", or "article"
+       - "title": human-readable title of the resource (e.g. "Physical Layer Explained")
+       - "platform": the target platform name. Choose from: "Neso Academy", "Gate Smashers", "freeCodeCamp", "Wikipedia", "GeeksforGeeks", "Cisco Networking Academy", "MDN Web Docs", "Microsoft Learn", "Official Documentation".
+       - "query": search keywords for this platform (e.g. "Physical Layer Data Communication", "OSI reference model", "checksum calculation tutorial").
+       - Do NOT include any "url" key.
     """
     
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=800)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1000)
             # Validate with Pydantic
             validated = ConceptContentAI.model_validate(result_json)
             return validated
@@ -140,16 +213,18 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
 
 async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContentAI]:
     """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
-    # We use a semaphore to avoid overloading the Groq API rate limits (TPM/RPM limits)
-    semaphore = asyncio.Semaphore(2)
+    # Semaphore(4): allow up to 4 concurrent Groq calls.
+    # llama-3.3-70b-versatile TPM limit is 12k; each content call uses ~600 tokens max,
+    # so 4 concurrent calls reserve ~2400 tokens/s - well within safe burst limits.
+    # The stagger is intentionally removed: the semaphore itself controls throughput,
+    # and pre-semaphore staggering was causing up to 9.6s of artificial idle waiting.
+    semaphore = asyncio.Semaphore(4)
     
-    async def sem_task(index: int, concept: AIConceptItem) -> ConceptContentAI:
-        # Stagger start by 1.2s to prevent initial rate-limit collisions
-        await asyncio.sleep(index * 1.2)
+    async def sem_task(concept: AIConceptItem) -> ConceptContentAI:
         async with semaphore:
             return await generate_single_concept_content(concept)
             
-    tasks = [sem_task(i, c) for i, c in enumerate(concepts)]
+    tasks = [sem_task(c) for c in concepts]
     results = await asyncio.gather(*tasks)
     return list(results)
 

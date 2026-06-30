@@ -62,12 +62,28 @@ class GroqProvider(LLMProvider):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self.api_url, headers=headers, json=payload)
-            if response.status_code == 429 and payload.get("model") == "llama-3.3-70b-versatile":
-                logger.warning("Groq rate limit (TPM/TPD) exceeded on llama-3.3-70b-versatile. Falling back to llama-3.1-8b-instant permanently...")
-                self.model = "llama-3.1-8b-instant"
-                payload["model"] = "llama-3.1-8b-instant"
-                response = await client.post(self.api_url, headers=headers, json=payload)
-                
+            if response.status_code == 429:
+                error_body = response.text
+                # Only fall back permanently for daily/hourly quota exhaustion (RPD/TPD).
+                # For per-minute limits (TPM/RPM), re-raise so the caller's retry logic
+                # can sleep precisely using the Groq 'try again in Xs' message and retry
+                # with the full-quality model — avoiding cascading failures on the
+                # weaker llama-3.1-8b-instant which has a lower 6k TPM limit.
+                is_daily_limit = "per_day" in error_body or "per_hour" in error_body
+                if is_daily_limit and payload.get("model") == "llama-3.3-70b-versatile":
+                    logger.warning(
+                        "Groq daily/hourly quota exhausted on llama-3.3-70b-versatile. "
+                        "Falling back to llama-3.1-8b-instant permanently..."
+                    )
+                    self.model = "llama-3.1-8b-instant"
+                    payload["model"] = "llama-3.1-8b-instant"
+                    response = await client.post(self.api_url, headers=headers, json=payload)
+                else:
+                    # Temporary per-minute limit — raise as-is with the full error body
+                    # so _handle_retry_sleep can parse the exact retry-after duration.
+                    logger.warning(f"Groq temporary rate limit hit (TPM/RPM). Raising for caller retry: {error_body}")
+                    raise RuntimeError(f"Groq API failed: {error_body}")
+
             if response.status_code != 200:
                 logger.error(f"Groq API error (status {response.status_code}): {response.text}")
                 raise RuntimeError(f"Groq API failed: {response.text}")
