@@ -29,16 +29,18 @@ class ScheduleItem(BaseModel):
 
 
 class QuizQuestion(BaseModel):
-    type: Literal["mcq", "short_answer"]
+    type: Literal["mcq"] = "mcq"
     question: str
-    options: list[str] | None = None
-    answer: str
+    options: list[str]
+    correct_option_index: int
 
 
 class Resource(BaseModel):
     type: Literal["video", "docs", "article"]
     title: str
     url: str
+    platform: str | None = None
+    query: str | None = None
 
 
 class ConceptContent(BaseModel):
@@ -140,10 +142,9 @@ class ChatResponse(BaseModel):
 
 class QuizGradeRequest(BaseModel):
     question_id: str
-    question_text: str
-    student_answer: str
-    correct_answer: str
-    confidence_reported: Optional[float] = None
+    selected_option_index: int
+    confidence_reported: float
+    response_time_ms: int = 0
 
 
 class QuizGradeResponse(BaseModel):

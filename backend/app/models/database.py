@@ -300,6 +300,7 @@ class QuizAttempt(Base):
     is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
     confidence_reported: Mapped[float] = mapped_column(Float, nullable=False)
     response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     answered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -371,7 +372,7 @@ class ScheduleHistory(Base):
     )
 
 # Register Phase 5 intelligence models in metadata
-from app.models.learning_intelligence import TutorChatMessage, StudentMistake, LearningProfile
+from app.models.learning_intelligence import TutorChatMessage, StudentMistake
 
 # Register Phase 6 observability models in metadata
 from app.models.api_usage_logs import ApiUsageLog

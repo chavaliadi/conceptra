@@ -24,6 +24,66 @@ const resourceIcons: Record<string, string> = {
   article: '📰',
 }
 
+function parseExplanationSections(text: string) {
+  const sections: { title: string; content: string; icon: string; style: string }[] = [];
+  const regex = /(💡\s*(?:\*\*)?Analogy(?:\*\*)?:|🌐\s*(?:\*\*)?Real-World Example(?:\*\*)?:|🎯\s*(?:\*\*)?Exam Tip(?:\*\*)?:|⚠️\s*(?:\*\*)?Frequently Confused With(?:\*\*)?:|📚\s*(?:\*\*)?Recommended Reading(?:\*\*)?:)/g;
+  
+  const parts = text.split(regex);
+  if (parts.length === 1) {
+    sections.push({
+      title: 'Detailed Explanation',
+      content: text,
+      icon: '📖',
+      style: 'border-slate-800 bg-slate-900/10 text-slate-200'
+    });
+    return sections;
+  }
+  
+  if (parts[0].trim()) {
+    sections.push({
+      title: 'Concept Explanation',
+      content: parts[0].trim(),
+      icon: '📖',
+      style: 'border-slate-900/60 bg-slate-900/20 text-slate-200'
+    });
+  }
+  
+  for (let i = 1; i < parts.length; i += 2) {
+    const titleHeader = parts[i];
+    const sectionBody = parts[i + 1] ? parts[i + 1].trim() : '';
+    if (!sectionBody) continue;
+    
+    let title = 'Section';
+    let icon = '💡';
+    let style = 'border-slate-800 bg-slate-900/10 text-slate-200';
+    
+    if (titleHeader.includes('💡')) {
+      title = 'Analogy';
+      icon = '💡';
+      style = 'border-amber-500/20 bg-amber-500/5 text-amber-200';
+    } else if (titleHeader.includes('🌐')) {
+      title = 'Real-World Example';
+      icon = '🌐';
+      style = 'border-sky-500/20 bg-sky-500/5 text-sky-200';
+    } else if (titleHeader.includes('🎯')) {
+      title = 'Exam Tip';
+      icon = '🎯';
+      style = 'border-emerald-500/20 bg-emerald-500/5 text-emerald-200 font-medium';
+    } else if (titleHeader.includes('⚠️')) {
+      title = 'Frequently Confused With';
+      icon = '⚠️';
+      style = 'border-rose-500/20 bg-rose-500/5 text-rose-200';
+    } else if (titleHeader.includes('📚')) {
+      title = 'Recommended Reading';
+      icon = '📚';
+      style = 'border-violet-500/20 bg-violet-500/5 text-violet-200';
+    }
+    
+    sections.push({ title, content: sectionBody, icon, style });
+  }
+  return sections;
+}
+
 export default function ConceptPanel({
   planId,
   concept,
@@ -32,35 +92,34 @@ export default function ConceptPanel({
   onClose,
 }: ConceptPanelProps) {
   const { getToken } = useAuth()
-  const [content, setContent] = useState<ConceptContent | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedOptions, setSelectedOptions] = useState<Record<number, string>>({})
+  const [selectedOptions, setSelectedOptions] = useState<Record<number, number>>({})
+  const [selectedConfidence, setSelectedConfidence] = useState<Record<number, number>>({})
+  const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({})
   
   // Tab and Interactive States
   const [activeTab, setActiveTab] = useState<'study' | 'quiz' | 'tutor'>('study')
-  const [shortAnswerInputs, setShortAnswerInputs] = useState<Record<number, string>>({})
   const [gradingResults, setGradingResults] = useState<Record<number, { correct: boolean; score: number; feedback: string }>>({})
   const [gradingLoading, setGradingLoading] = useState<Record<number, boolean>>({})
-
+ 
   // AI Tutor states
   const [messages, setMessages] = useState<TutorChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
   const [sendingChat, setSendingChat] = useState(false)
   const [profile, setProfile] = useState<LearningProfile | null>(null)
-
+ 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
     setContent(null)
     setSelectedOptions({})
-    setShortAnswerInputs({})
+    setSelectedConfidence({})
+    setFlaggedQuestions({})
     setGradingResults({})
     setGradingLoading({})
     setMessages([])
     setProfile(null)
-
+ 
     const fetchContent = async () => {
       try {
         const token = await getToken()
@@ -72,14 +131,14 @@ export default function ConceptPanel({
         if (!cancelled) setLoading(false)
       }
     }
-
+ 
     fetchContent()
-
+ 
     return () => {
       cancelled = true
     }
   }, [planId, concept.id])
-
+ 
   const fetchProfile = async () => {
     try {
       const token = await getToken()
@@ -89,7 +148,7 @@ export default function ConceptPanel({
       console.error('Failed to fetch profile', err)
     }
   }
-
+ 
   const fetchChat = async () => {
     try {
       const token = await getToken()
@@ -99,17 +158,16 @@ export default function ConceptPanel({
       console.error('Failed to fetch chat history', err)
     }
   }
-
-  const handleGradeQuiz = async (index: number, questionText: string, studentAnswer: string, correctAnswer: string) => {
-    if (!studentAnswer.trim()) return
+ 
+  const handleGradeQuiz = async (index: number, selectedOptionIndex: number, confidenceReported: number) => {
     try {
       setGradingLoading((prev) => ({ ...prev, [index]: true }))
       const token = await getToken()
       const res = await gradeQuizResponse(planId, concept.id, {
         question_id: String(index),
-        question_text: questionText,
-        student_answer: studentAnswer,
-        correct_answer: correctAnswer,
+        selected_option_index: selectedOptionIndex,
+        confidence_reported: confidenceReported,
+        response_time_ms: 0,
       }, token)
       setGradingResults((prev) => ({ ...prev, [index]: res }))
       fetchProfile()
@@ -117,6 +175,31 @@ export default function ConceptPanel({
       alert(err instanceof Error ? err.message : 'Quiz grading failed')
     } finally {
       setGradingLoading((prev) => ({ ...prev, [index]: false }))
+    }
+  }
+
+  const handleFlagQuestion = async (index: number, questionText: string) => {
+    try {
+      const token = await getToken()
+      const url = `/api/v2/plans/${planId}/concepts/${concept.id}/quiz/flag`
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ question_text: questionText }),
+      })
+      if (response.ok) {
+        setFlaggedQuestions((prev) => ({ ...prev, [index]: true }))
+      } else {
+        alert('Failed to flag question.')
+      }
+    } catch (err) {
+      console.error('Flag error:', err)
     }
   }
 
@@ -225,12 +308,25 @@ export default function ConceptPanel({
         {content && activeTab === 'study' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Explanation Section */}
-            <section className="space-y-2">
+            <section className="space-y-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
                 Detailed Explanation
               </h3>
-              <div className="rounded-xl border border-slate-900 bg-slate-900/30 p-4 leading-relaxed text-sm text-slate-200">
-                {content.explanation.replace(/\*\*(.*?)\*\*/g, '$1')}
+              <div className="space-y-3.5">
+                {parseExplanationSections(content.explanation).map((section, idx) => (
+                  <div
+                    key={idx}
+                    className={`rounded-xl border p-4 leading-relaxed text-xs space-y-1.5 transition duration-200 hover:scale-[1.01] ${section.style}`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-[9px] uppercase tracking-wider">
+                      <span>{section.icon}</span>
+                      <span>{section.title}</span>
+                    </div>
+                    <p className="text-slate-350 leading-relaxed whitespace-pre-wrap">
+                      {section.content.replace(/^[:\s\-*]+/g, '').trim()}
+                    </p>
+                  </div>
+                ))}
               </div>
             </section>
 
@@ -251,7 +347,15 @@ export default function ConceptPanel({
                     <span className="text-lg">{resourceIcons[resource.type] ?? '🔗'}</span>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-slate-200 truncate">{resource.title}</p>
-                      <p className="text-[10px] text-slate-500 truncate">{new URL(resource.url).hostname}</p>
+                      {resource.platform && resource.query ? (
+                        <p className="text-[10px] text-slate-500 truncate">
+                          Search <span className="text-violet-400 font-bold">{resource.platform}</span>: <span className="text-slate-400 italic">"{resource.query}"</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {new URL(resource.url).hostname}
+                        </p>
+                      )}
                     </div>
                     <span className="text-slate-600 group-hover:text-slate-400 text-xs">&rarr;</span>
                   </a>
@@ -263,86 +367,137 @@ export default function ConceptPanel({
 
         {content && activeTab === 'quiz' && (
           <div className="space-y-5 animate-fadeIn">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Concept Checkpoints
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex justify-between items-center">
+              <span>Concept Checkpoints</span>
+              <span className="text-[10px] text-slate-500 lowercase normal-case">Grade instant objective MCQ checks</span>
             </h3>
-            {content.quiz.map((q, index) => (
-              <div key={index} className="rounded-xl border border-slate-900 bg-slate-900/30 p-4 space-y-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-md">
-                  Q{index + 1}: {q.type === 'mcq' ? 'Multiple Choice' : 'Short Answer'}
-                </span>
-                <p className="text-sm font-semibold text-slate-200 leading-snug">{q.question}</p>
-                
-                {/* MCQ Question Mode */}
-                {q.type === 'mcq' && q.options && (
+            {content.quiz.map((q, index) => {
+              const selectedIdx = selectedOptions[index];
+              const confidenceVal = selectedConfidence[index];
+              const isGraded = !!gradingResults[index];
+              const isLdg = !!gradingLoading[index];
+              const gradeRes = gradingResults[index];
+              const isFlagged = !!flaggedQuestions[index];
+
+              return (
+                <div key={index} className="rounded-xl border border-slate-900 bg-slate-900/30 p-4 space-y-4 relative overflow-hidden">
+                  {/* Flag button */}
+                  <button
+                    type="button"
+                    onClick={() => handleFlagQuestion(index, q.question)}
+                    disabled={isFlagged}
+                    className={`absolute top-4 right-4 text-[10px] font-bold px-2 py-0.5 rounded-md border transition duration-150 ${
+                      isFlagged
+                        ? 'border-violet-500/20 bg-violet-500/10 text-violet-400'
+                        : 'border-slate-800 text-slate-500 hover:text-slate-350 hover:border-slate-700'
+                    }`}
+                  >
+                    {isFlagged ? '🏳️ Flagged' : '🏳️ Flag Question'}
+                  </button>
+
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-md">
+                    Q{index + 1}: Multiple Choice
+                  </span>
+                  <p className="text-sm font-semibold text-slate-200 leading-snug pr-20">{q.question}</p>
+                  
+                  {/* Options List */}
                   <div className="grid gap-2 mt-2">
-                    {q.options.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() =>
-                          setSelectedOptions((prev) => ({ ...prev, [index]: option }))
+                    {q.options.map((option, optIdx) => {
+                      const isSelected = selectedIdx === optIdx;
+                      
+                      // Highlight styles when graded
+                      let buttonStyle = 'border-slate-800 text-slate-400 bg-slate-950/40 hover:border-slate-700 hover:text-slate-200';
+                      if (isGraded) {
+                        const isCorrectOpt = optIdx === q.correct_option_index;
+                        if (isCorrectOpt) {
+                          buttonStyle = 'border-emerald-500 bg-emerald-500/10 text-emerald-300 font-medium cursor-default';
+                        } else if (isSelected) {
+                          buttonStyle = 'border-rose-500 bg-rose-500/10 text-rose-300 font-medium cursor-default';
+                        } else {
+                          buttonStyle = 'border-slate-900 text-slate-600 bg-slate-950/25 cursor-default';
                         }
-                        className={`block w-full rounded-xl border px-3.5 py-2.5 text-left text-xs transition duration-150 ${
-                          selectedOptions[index] === option
-                            ? option === q.answer
-                              ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300 font-medium'
-                              : 'border-rose-500 bg-rose-500/10 text-rose-300 font-medium'
-                            : 'border-slate-800 text-slate-400 bg-slate-950/40 hover:border-slate-700 hover:text-slate-200'
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Short Answer / Soft-Grading Mode */}
-                {q.type === 'short_answer' && (
-                  <div className="space-y-3">
-                    <textarea
-                      placeholder="Type your explanation answer here..."
-                      value={shortAnswerInputs[index] ?? ''}
-                      onChange={(e) =>
-                        setShortAnswerInputs((prev) => ({ ...prev, [index]: e.target.value }))
+                      } else if (isSelected) {
+                        buttonStyle = 'border-violet-500 bg-violet-500/10 text-violet-300 font-medium';
                       }
-                      rows={3}
-                      className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-white placeholder-slate-650 focus:outline-none focus:border-violet-500 transition"
-                    />
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] text-slate-500">Graded by Conceptra AI Tutor</span>
-                      <button
-                        type="button"
-                        disabled={!shortAnswerInputs[index]?.trim() || gradingLoading[index]}
-                        onClick={() =>
-                          handleGradeQuiz(index, q.question, shortAnswerInputs[index], q.answer)
-                        }
-                        className="px-3.5 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 text-white disabled:text-slate-500 font-bold text-xs rounded-lg transition"
-                      >
-                        {gradingLoading[index] ? 'Grading...' : 'Submit Answer'}
-                      </button>
-                    </div>
 
-                    {/* AI Grading Scorecard */}
-                    {gradingResults[index] && (
-                      <div className={`mt-3 p-3.5 rounded-xl border leading-relaxed text-xs space-y-2 ${
-                        gradingResults[index].correct
-                          ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
-                          : 'border-rose-500/20 bg-rose-500/5 text-rose-300'
-                      }`}>
-                        <div className="flex justify-between items-center font-bold">
-                          <span>{gradingResults[index].correct ? '✅ Concept Mastered' : '❌ Needs Improvement'}</span>
-                          <span className="bg-white/10 px-2 py-0.5 rounded text-[10px]">
-                            Score: {gradingResults[index].score}/100
-                          </span>
-                        </div>
-                        <p className="text-slate-300 leading-snug">{gradingResults[index].feedback}</p>
-                      </div>
-                    )}
+                      return (
+                        <button
+                          key={optIdx}
+                          type="button"
+                          disabled={isGraded}
+                          onClick={() =>
+                            setSelectedOptions((prev) => ({ ...prev, [index]: optIdx }))
+                          }
+                          className={`block w-full rounded-xl border px-3.5 py-2.5 text-left text-xs transition duration-150 ${buttonStyle}`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* Confidence Slider / Selection */}
+                  {selectedIdx !== undefined && !isGraded && (
+                    <div className="space-y-3.5 pt-2 border-t border-slate-900 animate-fadeIn">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        How sure were you of this answer?
+                      </p>
+                      <div className="grid grid-cols-3 gap-2 bg-slate-950/80 p-1 border border-slate-900 rounded-xl">
+                        {[
+                          { label: '😰 Just guessing', val: 0.25 },
+                          { label: '🤔 Somewhat sure', val: 0.5 },
+                          { label: '💪 Very confident', val: 1.0 },
+                        ].map((conf) => (
+                          <button
+                            key={conf.val}
+                            type="button"
+                            onClick={() =>
+                              setSelectedConfidence((prev) => ({ ...prev, [index]: conf.val }))
+                            }
+                            className={`py-2 text-[10px] font-semibold rounded-lg transition text-center ${
+                              confidenceVal === conf.val
+                                ? 'bg-violet-600 text-white shadow-md font-bold'
+                                : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                            }`}
+                          >
+                            {conf.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Submit action */}
+                      {confidenceVal !== undefined && (
+                        <button
+                          type="button"
+                          disabled={isLdg}
+                          onClick={() => handleGradeQuiz(index, selectedIdx, confidenceVal)}
+                          className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 text-white disabled:text-slate-500 font-bold text-xs rounded-xl shadow-lg shadow-violet-900/10 transition"
+                        >
+                          {isLdg ? 'Submitting & Grading...' : 'Submit Answer'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Grading results display */}
+                  {isGraded && gradeRes && (
+                    <div className={`p-3.5 rounded-xl border leading-relaxed text-xs space-y-2 animate-fadeIn ${
+                      gradeRes.correct
+                        ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
+                        : 'border-rose-500/20 bg-rose-500/5 text-rose-350'
+                    }`}>
+                      <div className="flex justify-between items-center font-bold">
+                        <span>{gradeRes.correct ? '✅ Answer Correct' : '❌ Answer Incorrect'}</span>
+                        <span className="bg-white/10 px-2 py-0.5 rounded text-[9px]">
+                          Mastery Delta Calculated
+                        </span>
+                      </div>
+                      <p className="text-slate-350 leading-relaxed font-medium">{gradeRes.feedback}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

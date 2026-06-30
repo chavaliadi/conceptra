@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routes.deps import get_required_user
 from app.database import get_db
 from app.models.database import Concept, ConceptContent, Edge, Plan, Progress, QuizAttempt
-from app.models.learning_intelligence import LearningProfile, StudentMistake, TutorChatMessage
+from app.models.learning_intelligence import StudentMistake, TutorChatMessage
 from app.models.schemas import (
     ChatMessageResponse,
     ChatRequest,
@@ -27,32 +27,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/plans", tags=["ai_tutor"])
 
 
-# ─── HELPER: GET OR CREATE LEARNING PROFILE ─────────────────────────────────
+# ─── HELPER: GET OR CREATE PROGRESS ─────────────────────────────────
 
-async def get_or_create_profile(
+async def get_or_create_progress(
     db: AsyncSession, plan_id: UUID, concept_id: UUID
-) -> LearningProfile:
-    """Fetch the learning profile for a concept, or create one with default scores."""
-    stmt = select(LearningProfile).where(
-        LearningProfile.plan_id == plan_id,
-        LearningProfile.concept_id == concept_id,
+) -> Progress:
+    """Fetch the progress (mastery) record for a concept, or create one if missing."""
+    stmt = select(Progress).where(
+        Progress.plan_id == plan_id,
+        Progress.concept_id == concept_id,
     )
     result = await db.execute(stmt)
-    profile = result.scalar_one_or_none()
+    progress = result.scalar_one_or_none()
 
-    if not profile:
-        profile = LearningProfile(
+    if not progress:
+        progress = Progress(
             plan_id=plan_id,
             concept_id=concept_id,
-            mastery_score=0.0,
-            confidence_score=0.0,
-            retention_score=0.0,
-            difficulty_score=0.0,
-            recommended_action="Start reading explanation and take the quiz",
+            status="untouched",
+            mastery_pct=0.0,
+            retention_pct=0.0,
+            confidence_level=0.0,
+            attempts_count=0,
+            ease_factor=2.5,
+            interval_days=0,
+            repetitions=0
         )
-        db.add(profile)
+        db.add(progress)
         await db.flush()
-    return profile
+    return progress
 
 
 # ─── GET /api/v2/plans/{plan_id}/concepts/{concept_id}/profile ──────────────
@@ -63,9 +66,8 @@ async def get_concept_profile(
     concept_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_required_user),
-) -> LearningProfile:
-    """Fetch the current student learning profile/mastery scores for a concept."""
-    # Verify plan exists and belongs to user
+):
+    """Fetch the current student progress/mastery scores for a concept."""
     plan = await db.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -74,8 +76,42 @@ async def get_concept_profile(
     if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
         raise HTTPException(status_code=403, detail="Not authorized to access this plan")
 
-    profile = await get_or_create_profile(db, plan_id, concept_id)
-    return profile
+    concept = await db.get(Concept, concept_id)
+    if not concept:
+        raise HTTPException(status_code=404, detail="Concept not found")
+
+    progress = await get_or_create_progress(db, plan_id, concept_id)
+    
+    # Calculate decayed retention dynamically
+    from app.services.scheduler import calculate_decayed_retention
+    retention = calculate_decayed_retention(progress.last_reviewed_at, progress.interval_days, progress.mastery_pct)
+    
+    # Update computed retention in DB
+    progress.retention_pct = retention
+    await db.commit()
+    
+    difficulty_map = {"easy": 30.0, "medium": 60.0, "hard": 90.0}
+    difficulty_score = difficulty_map.get(concept.difficulty.lower(), 60.0)
+    
+    # Map status & progress to recommended action
+    if progress.mastery_pct == 0:
+        rec_action = "Concept untouched. Start reading explanation and take the quiz"
+    elif progress.mastery_pct < 40:
+        rec_action = "Struggling. Review mistakes and practice with the AI Tutor"
+    elif progress.next_review_at and progress.next_review_at <= datetime.now(timezone.utc):
+        rec_action = "Due for review! Take a quick review quiz to strengthen retention"
+    elif progress.mastery_pct >= 80:
+        rec_action = "Concept mastered! Ready to move to the next topic"
+    else:
+        rec_action = "Learned. Keep reviewing regularly to maintain retention"
+
+    return LearningProfileResponse(
+        mastery_score=progress.mastery_pct,
+        confidence_score=progress.confidence_level * 100.0,
+        retention_score=retention,
+        difficulty_score=difficulty_score,
+        recommended_action=rec_action
+    )
 
 
 # ─── GET /api/v2/plans/{plan_id}/concepts/{concept_id}/chat ─────────────────
@@ -146,8 +182,33 @@ async def chat_with_tutor(
     content = content_res.scalar_one_or_none()
     explanation = content.explanation if content else "Core study concept"
 
-    # Get student profile
-    profile = await get_or_create_profile(db, plan_id, concept_id)
+    # Get student progress
+    progress = await get_or_create_progress(db, plan_id, concept_id)
+
+    # Query recent confident-incorrect quiz attempts (is_correct == False, confidence_reported >= 0.7)
+    misconceptions_stmt = (
+        select(QuizAttempt)
+        .where(
+            QuizAttempt.plan_id == plan_id,
+            QuizAttempt.concept_id == concept_id,
+            QuizAttempt.is_correct == False,
+            QuizAttempt.confidence_reported >= 0.7
+        )
+        .order_by(QuizAttempt.answered_at.desc())
+        .limit(3)
+    )
+    misconceptions_res = await db.execute(misconceptions_stmt)
+    misconceptions = list(misconceptions_res.scalars().all())
+
+    misconceptions_str = ""
+    if misconceptions:
+        misconceptions_str = "\nStudent's Recent Confident-Incorrect Misconceptions (they answered incorrectly while feeling confident):\n"
+        for idx, m in enumerate(misconceptions):
+            selected = m.selected_option_index
+            correct = m.correct_option_index
+            selected_str = m.options[selected] if (m.options and 0 <= selected < len(m.options)) else f"Option index {selected}"
+            correct_str = m.options[correct] if (m.options and 0 <= correct < len(m.options)) else f"Option index {correct}"
+            misconceptions_str += f"- Question: \"{m.question_text}\"\n  They selected: \"{selected_str}\" (Correct Answer: \"{correct_str}\")\n"
 
     # Save User Message
     user_msg = TutorChatMessage(
@@ -183,14 +244,16 @@ Concept Description: {concept.description or "N/A"}
 Detailed Concept Explanation: {explanation}
 
 Student Mastery Profile for this Concept:
-- Mastery Score: {profile.mastery_score:.1f}%
-- Confidence Score: {profile.confidence_score:.1f}%
-- Difficulty Score: {profile.difficulty_score:.1f}%
-- Retention Score: {profile.retention_score:.1f}%
+- Mastery Score: {progress.mastery_pct:.1f}%
+- Confidence Level: {progress.confidence_level * 100.0:.1f}%
+- Ease Factor: {progress.ease_factor:.2f}
+- Attempts Count: {progress.attempts_count}
+{misconceptions_str}
 
-INSTRUCTION: Adapt your teaching to their mastery profile.
+INSTRUCTION: Adapt your teaching to their mastery profile and directly address the misconceptions listed above if any are present.
 - If mastery is low (<40%), explain with simple analogies, be extremely patient, and guide them step-by-step.
 - If mastery is high (>70%), dive into advanced nuances, ask thought-provoking follow-ups, and keep explanations concise.
+- If they have confident-incorrect answers above, address those specific misconceptions and help them correct their understanding.
 - Answer directly and accurately. Keep your response under 4 sentences.
 """
 
@@ -228,12 +291,10 @@ async def grade_quiz_response(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_required_user),
 ) -> QuizGradeResponse:
-    """Soft-grade a student's quiz response.
+    """Grade a student's quiz response objectively by checking correct_option_index.
 
-    Uses LLM to evaluate semantic accuracy, logs student mistakes, and updates
-    the learning profile variables.
+    Updates progress mastery percentages using the SM-2 algorithm.
     """
-    # Verify authorization
     plan = await db.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -246,116 +307,81 @@ async def grade_quiz_response(
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found")
 
-    # Evaluate using LLM soft-grading
-    system_prompt = """You are a precise educational grading assistant.
-Compare the student's answer with the correct answer. You must account for synonyms, typos, or equivalent phrasing.
-You must return a JSON object with EXACTLY the following keys:
-- "correct": boolean (true if conceptually correct, false if incorrect or missing critical points)
-- "score": number (0 to 100 representing accuracy)
-- "feedback": string (constructive feedback explaining what was correct or missing, under 2 sentences)
-- "mistake_detail": string or null (if incorrect, explain the core misconception in 1 sentence. If correct, return null)
-"""
+    content_stmt = select(ConceptContent).where(ConceptContent.concept_id == concept_id)
+    content_res = await db.execute(content_stmt)
+    concept_content = content_res.scalar_one_or_none()
+    if not concept_content or not concept_content.quiz:
+        raise HTTPException(status_code=404, detail="Concept quiz content not found")
 
-    prompt = f"""Question: "{req.question_text}"
-Student Answer: "{req.student_answer}"
-Correct Answer: "{req.correct_answer}"
-"""
+    try:
+        q_idx = int(req.question_id)
+        question_data = concept_content.quiz[q_idx]
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Invalid question index")
 
-    llm = get_llm_provider()
-    grade_res = await llm.generate(
-        prompt=prompt,
-        system_prompt=system_prompt,
-        temperature=0.1,
-        response_format="json",
-    )
+    correct_idx = question_data.get("correct_option_index")
+    options = question_data.get("options", [])
+    question_text = question_data.get("question", "")
 
-    if not isinstance(grade_res, dict):
-        raise HTTPException(status_code=500, detail="Invalid soft grading response structure")
+    if correct_idx is None or not options:
+        raise HTTPException(status_code=500, detail="Quiz question is malformed in database")
 
-    is_correct = bool(grade_res.get("correct", False))
-    score = float(grade_res.get("score", 0.0))
-    feedback = str(grade_res.get("feedback", "No feedback available."))
-    mistake_detail = grade_res.get("mistake_detail")
+    selected_idx = req.selected_option_index
+    is_correct = (selected_idx == correct_idx)
+    score = 100.0 if is_correct else 0.0
 
-    # Load learning profile
-    profile = await get_or_create_profile(db, plan_id, concept_id)
+    selected_text = options[selected_idx] if (0 <= selected_idx < len(options)) else f"Option {selected_idx}"
+    correct_text = options[correct_idx] if (0 <= correct_idx < len(options)) else f"Option {correct_idx}"
 
-    # Perform mathematical profile updates
     if is_correct:
-        profile.mastery_score = min(100.0, profile.mastery_score + 35.0)
-        profile.confidence_score = min(100.0, profile.confidence_score + 25.0)
-        profile.retention_score = min(100.0, profile.retention_score + 20.0)
-        profile.difficulty_score = max(0.0, profile.difficulty_score - 15.0)
-        profile.recommended_action = "Concept understood. Move to next dependency."
+        feedback = f"Correct! '{selected_text}' is correct."
     else:
-        profile.mastery_score = max(0.0, profile.mastery_score - 15.0)
-        profile.confidence_score = max(0.0, profile.confidence_score - 15.0)
-        profile.retention_score = max(0.0, profile.retention_score - 5.0)
-        profile.difficulty_score = min(100.0, profile.difficulty_score + 20.0)
-        profile.recommended_action = "Review mistakes and read explanation again."
-
-        # Save mistake log
-        mistake = StudentMistake(
-            plan_id=plan_id,
-            concept_id=concept_id,
-            question_id=req.question_id,
-            incorrect_answer=req.student_answer,
-            mistake_detail=str(mistake_detail or "Concept misunderstanding"),
-        )
-        db.add(mistake)
-
-    profile.last_review = func.now()
+        feedback = f"Incorrect. You selected '{selected_text}'. The correct answer is '{correct_text}'."
 
     # Load Progress/Mastery record
-    stmt_progress = select(Progress).where(
-        Progress.plan_id == plan_id,
-        Progress.concept_id == concept_id
-    )
-    res_progress = await db.execute(stmt_progress)
-    progress_rec = res_progress.scalar_one_or_none()
+    progress_rec = await get_or_create_progress(db, plan_id, concept_id)
     
-    conf_reported = req.confidence_reported if req.confidence_reported is not None else 0.5
-    quality = calculate_blended_quality(is_correct, conf_reported)
+    quality = calculate_blended_quality(is_correct, req.confidence_reported)
 
-    if progress_rec:
-        new_reps, new_ef, new_interval = update_sm2(
-            progress_rec.repetitions,
-            progress_rec.ease_factor,
-            progress_rec.interval_days,
-            quality
-        )
-        
-        delta = calculate_mastery_delta(quality)
-        new_mastery = max(0.0, min(100.0, progress_rec.mastery_pct + delta))
-        
-        progress_rec.repetitions = new_reps
-        progress_rec.ease_factor = new_ef
-        progress_rec.interval_days = new_interval
-        progress_rec.mastery_pct = new_mastery
-        progress_rec.confidence_level = conf_reported
-        progress_rec.attempts_count += 1
-        progress_rec.last_reviewed_at = func.now()
-        progress_rec.next_review_at = func.now() + timedelta(days=new_interval)
-        progress_rec.retention_pct = 100.0
-        
-        if new_mastery >= 80.0:
-            progress_rec.status = "learned"
-        elif new_mastery < 40.0:
-            progress_rec.status = "struggling"
-        else:
-            progress_rec.status = "untouched"
+    new_reps, new_ef, new_interval = update_sm2(
+        progress_rec.repetitions,
+        progress_rec.ease_factor,
+        progress_rec.interval_days,
+        quality
+    )
+    
+    delta = calculate_mastery_delta(quality)
+    new_mastery = max(0.0, min(100.0, progress_rec.mastery_pct + delta))
+    
+    progress_rec.repetitions = new_reps
+    progress_rec.ease_factor = new_ef
+    progress_rec.interval_days = new_interval
+    progress_rec.mastery_pct = new_mastery
+    progress_rec.confidence_level = req.confidence_reported
+    progress_rec.attempts_count += 1
+    progress_rec.last_reviewed_at = func.now()
+    progress_rec.next_review_at = func.now() + timedelta(days=new_interval)
+    progress_rec.retention_pct = 100.0
+    
+    if new_mastery >= 80.0:
+        progress_rec.status = "learned"
+    elif new_mastery < 40.0:
+        progress_rec.status = "struggling"
+    else:
+        progress_rec.status = "untouched"
 
     # Save QuizAttempt log
     quiz_attempt = QuizAttempt(
         plan_id=plan_id,
         concept_id=concept_id,
-        question_text=req.question_text,
-        options=[],
-        correct_option_index=-1,
-        selected_option_index=-1,
+        question_text=question_text,
+        options=options,
+        correct_option_index=correct_idx,
+        selected_option_index=selected_idx,
         is_correct=is_correct,
-        confidence_reported=conf_reported,
-        response_time_ms=0,
+        confidence_reported=req.confidence_reported,
+        response_time_ms=req.response_time_ms,
+        is_flagged=False,
         answered_at=func.now()
     )
     db.add(quiz_attempt)
@@ -366,6 +392,47 @@ Correct Answer: "{req.correct_answer}"
         score=score,
         feedback=feedback,
     )
+
+
+@router.post("/{plan_id}/concepts/{concept_id}/quiz/flag")
+async def flag_quiz_question(
+    plan_id: UUID,
+    concept_id: UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_required_user),
+):
+    """Mark a specific quiz attempt as flagged by the user."""
+    plan = await db.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    clerk_uid = current_user.get("sub", "")
+    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    question_text = payload.get("question_text")
+    if not question_text:
+        raise HTTPException(status_code=400, detail="Missing question_text")
+
+    stmt = (
+        select(QuizAttempt)
+        .where(
+            QuizAttempt.plan_id == plan_id,
+            QuizAttempt.concept_id == concept_id,
+            QuizAttempt.question_text == question_text
+        )
+        .order_by(QuizAttempt.answered_at.desc())
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    attempt = res.scalar_one_or_none()
+    if attempt:
+        attempt.is_flagged = True
+        await db.commit()
+        return {"status": "success", "message": "Attempt flagged"}
+    else:
+        raise HTTPException(status_code=404, detail="Quiz attempt not found")
 
 
 # ─── GET /api/v2/plans/edges/explanation ────────────────────────────────────
@@ -445,26 +512,28 @@ async def get_weekly_report(
             "recommendation": "Generate some concepts first!"
         }
 
-    # Load all learning profiles for this plan
-    profiles_stmt = select(LearningProfile, Concept.name).join(
-        Concept, Concept.id == LearningProfile.concept_id
-    ).where(LearningProfile.plan_id == plan_id)
-    profiles_res = (await db.execute(profiles_stmt)).all()
+    # Load all progress records for this plan
+    progress_stmt = select(Progress, Concept.name).join(
+        Concept, Concept.id == Progress.concept_id
+    ).where(Progress.plan_id == plan_id)
+    progress_res = (await db.execute(progress_stmt)).all()
 
     mastered_count = 0
     total_confidence = 0.0
     weakness_names = []
     
-    profile_count = len(profiles_res)
+    progress_count = len(progress_res)
 
-    for profile, concept_name in profiles_res:
-        if profile.mastery_score >= 70.0:
+    from app.services.scheduler import calculate_decayed_retention
+    for pr, concept_name in progress_res:
+        retention = calculate_decayed_retention(pr.last_reviewed_at, pr.interval_days, pr.mastery_pct)
+        if pr.mastery_pct >= 70.0:
             mastered_count += 1
-        if profile.mastery_score < 40.0 or profile.difficulty_score > 60.0:
+        if pr.mastery_pct < 40.0 or pr.status == "struggling":
             weakness_names.append(concept_name)
-        total_confidence += profile.confidence_score
+        total_confidence += (pr.confidence_level * 100.0)
 
-    avg_confidence = total_confidence / profile_count if profile_count > 0 else 0.0
+    avg_confidence = total_confidence / progress_count if progress_count > 0 else 0.0
 
     # Build prompt for AI recommended action
     weaknesses_str = ", ".join(weakness_names) if weakness_names else "none"

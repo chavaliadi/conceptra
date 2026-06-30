@@ -22,16 +22,18 @@ export interface ScheduleItem {
 }
 
 export interface QuizQuestion {
-  type: 'mcq' | 'short_answer'
+  type: 'mcq'
   question: string
-  options?: string[] | null
-  answer: string
+  options: string[]
+  correct_option_index: number
 }
 
 export interface Resource {
   type: 'video' | 'docs' | 'article'
   title: string
   url: string
+  platform?: string
+  query?: string
 }
 
 export interface ConceptContent {
@@ -118,9 +120,9 @@ export interface TutorChatMessage {
 
 export interface QuizGradeRequest {
   question_id: string
-  question_text: string
-  student_answer: string
-  correct_answer: string
+  selected_option_index: number
+  confidence_reported: number
+  response_time_ms?: number
 }
 
 export interface QuizGradeResponse {

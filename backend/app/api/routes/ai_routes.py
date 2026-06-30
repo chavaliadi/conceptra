@@ -27,7 +27,12 @@ def generate_schedule_endpoint(concepts: List[AIConceptItem], edges: List[AIEdge
             [{"id": c.id} for c in concepts],
             [{"from_id": e.from_id, "to_id": e.to_id} for e in edges]
         )
-        return generate_schedule(sorted_ids)
+        concept_map = {c.id: c for c in concepts}
+        sorted_concepts = [
+            {"id": cid, "difficulty": concept_map[cid].difficulty}
+            for cid in sorted_ids if cid in concept_map
+        ]
+        return generate_schedule(sorted_concepts)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

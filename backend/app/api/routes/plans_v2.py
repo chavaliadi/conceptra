@@ -157,7 +157,12 @@ async def generate_plan_background(
                 [{"id": c.id} for c in concepts_list],
                 [{"from_id": e.from_id, "to_id": e.to_id} for e in edges_list]
             )
-            schedule_items = generate_schedule(sorted_ids, hours_per_day=hours_per_day)
+            concept_map = {c.id: c for c in concepts}
+            sorted_concepts = [
+                {"id": cid, "difficulty": concept_map[cid].difficulty}
+                for cid in sorted_ids if cid in concept_map
+            ]
+            schedule_items = generate_schedule(sorted_concepts, hours_per_day=hours_per_day)
             
             # Save schedule to DB
             for s in schedule_items:
@@ -372,7 +377,7 @@ async def _create_plan_logic(
         return CreatePlanResponse(id=plan.id)
     else:
         # Check cache (only if not syllabus upload)
-        num_concepts = 8
+        num_concepts = 25 if syllabus_text else 8
         cached = None
         if not syllabus_text:
             cached = await get_plan_cache(payload.topic, num_concepts)
@@ -479,20 +484,37 @@ async def get_plan_endpoint(
         for e in plan.edges
     ]
     
-    # Build schedule dynamically from topological sort
-    if concepts_list:
+    # Format schedule
+    if plan.schedule:
+        schedule_items = [
+            SchemaScheduleItem(
+                concept_id=str(s.concept_id),
+                week=s.week,
+                day=s.day,
+                priority=s.priority
+            )
+            for s in plan.schedule
+        ]
+    elif concepts_list:
         try:
             sorted_ids = validate_and_sort_dag(
                 [{"id": c.id} for c in concepts_list],
                 [{"from_id": e.from_id, "to_id": e.to_id} for e in edges_list]
             )
-            schedule_items = generate_schedule(sorted_ids, hours_per_day=plan.hours_per_day)
+            concept_map = {str(c.id): c for c in plan.concepts}
+            sorted_concepts = [
+                {"id": cid, "difficulty": concept_map[cid].difficulty}
+                for cid in sorted_ids if cid in concept_map
+            ]
+            schedule_items = generate_schedule(sorted_concepts, hours_per_day=plan.hours_per_day)
         except ValueError:
             # Fallback if cycle somehow exists
-            schedule_items = [
-                generate_schedule([c.id for c in concepts_list], hours_per_day=plan.hours_per_day)[i]
-                for i in range(len(concepts_list))
+            concept_map = {str(c.id): c for c in plan.concepts}
+            sorted_concepts = [
+                {"id": str(c.id), "difficulty": c.difficulty}
+                for c in plan.concepts
             ]
+            schedule_items = generate_schedule(sorted_concepts, hours_per_day=plan.hours_per_day)
     else:
         schedule_items = []
         
@@ -507,8 +529,8 @@ async def get_plan_endpoint(
                     QuizQuestion(
                         type=q["type"],
                         question=q["question"],
-                        options=q.get("options"),
-                        answer=q["answer"]
+                        options=q.get("options", []),
+                        correct_option_index=q.get("correct_option_index", 0)
                     )
                     for q in c.content.quiz
                 ],
@@ -516,10 +538,12 @@ async def get_plan_endpoint(
                     Resource(
                         type=r["type"],
                         title=r["title"],
-                        url=r["url"]
+                        url=r["url"],
+                        platform=r.get("platform"),
+                        query=r.get("query")
                     )
                     for r in c.content.resources
-                ]
+                ],
             )
             
     return PlanResponse(
@@ -785,8 +809,8 @@ async def get_due_reviews_endpoint(
                         QuizQuestion(
                             type=q["type"],
                             question=q["question"],
-                            options=q.get("options"),
-                            answer=q["answer"]
+                            options=q.get("options", []),
+                            correct_option_index=q.get("correct_option_index", 0)
                         )
                         for q in concept.content.quiz
                     ],
@@ -794,7 +818,9 @@ async def get_due_reviews_endpoint(
                         Resource(
                             type=r["type"],
                             title=r["title"],
-                            url=r["url"]
+                            url=r["url"],
+                            platform=r.get("platform"),
+                            query=r.get("query")
                         )
                         for r in concept.content.resources
                     ],
@@ -802,6 +828,42 @@ async def get_due_reviews_endpoint(
                     next_review_at=pr.next_review_at
                 )
             )
+
+    if due_items:
+        # Fetch mastery score for all concepts in the plan
+        prog_stmt = select(Progress.concept_id, Progress.mastery_pct).where(Progress.plan_id == plan_id)
+        prog_res = await db.execute(prog_stmt)
+        mastery_map = {row.concept_id: row.mastery_pct for row in prog_res}
+
+        # Build Graph structures
+        all_concept_ids = [c.id for c in plan.concepts]
+        adj = {cid: [] for cid in all_concept_ids}
+        in_degree = {cid: 0 for cid in all_concept_ids}
+
+        for e in plan.edges:
+            from_id = e.from_concept_id
+            to_id = e.to_concept_id
+            if from_id in adj and to_id in adj:
+                adj[from_id].append(to_id)
+                in_degree[to_id] += 1
+
+        zero_in = [cid for cid in all_concept_ids if in_degree[cid] == 0]
+        sorted_all_ids = []
+
+        while zero_in:
+            # Min-mastery priority
+            zero_in.sort(key=lambda cid: mastery_map.get(cid, 0.0))
+            curr = zero_in.pop(0)
+            sorted_all_ids.append(curr)
+
+            for neighbor in adj[curr]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    zero_in.append(neighbor)
+
+        # Sort due items according to topological min-mastery sort order
+        order_map = {cid: idx for idx, cid in enumerate(sorted_all_ids)}
+        due_items.sort(key=lambda item: order_map.get(item.id, 999999))
             
     return due_items
 
@@ -956,8 +1018,8 @@ async def get_concept_content_endpoint(
             QuizQuestion(
                 type=q["type"],
                 question=q["question"],
-                options=q.get("options"),
-                answer=q["answer"]
+                options=q.get("options", []),
+                correct_option_index=q.get("correct_option_index", 0)
             )
             for q in concept.content.quiz
         ],
@@ -965,7 +1027,9 @@ async def get_concept_content_endpoint(
             Resource(
                 type=r["type"],
                 title=r["title"],
-                url=r["url"]
+                url=r["url"],
+                platform=r.get("platform"),
+                query=r.get("query")
             )
             for r in concept.content.resources
         ]

@@ -49,11 +49,18 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
     if syllabus_text:
         prompt = f"""
         You are parsing a course syllabus for the topic: "{topic}".
-        Analyze the following extracted syllabus text and extract a list of core concepts to study:
-        ---
-        {syllabus_text}
-        ---
-
+        Analyze the following extracted syllabus text and extract a list of core concepts to study.
+        
+        CRITICAL GRANULARITY RULE:
+        Do NOT extract broad chapters, units, or modules (like "Data Link Layer", "Error Control", "Media Access Control", or "Wireless LANs"). Instead, extract specific, concrete, bullet-level sub-concepts, mechanisms, and algorithms covered within those units. 
+        For example:
+        - Instead of "Error Control", extract separate concepts for: "Parity Checks", "Cyclic Redundancy Check (CRC)", "Hamming Distance & Codes", and "Checksum".
+        - Instead of "Data Link Layer Protocols", extract: "Stop-and-Wait ARQ", "Go-Back-N ARQ", and "Selective Repeat ARQ".
+        - For media access, extract: "ALOHA", "CSMA/CD", and "CSMA/CA".
+        Each concept name must be highly specific so a student can be quizzed specifically on that topic.
+        
+        Extract exactly {num_concepts} objects representing these granular concepts.
+        
         You MUST return a JSON object with:
         1. "subject_domain": Inferred overall subject domain (e.g. "Computer Networks").
         2. "source_books": A list of primary textbooks, slide decks, or lecture note sources mentioned in the syllabus. Each source/book must be a JSON object with:
@@ -62,7 +69,7 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
            - "edition": Edition number or version details if applicable (otherwise null).
         3. "concepts": A list of exactly {num_concepts} objects representing the core study units from the syllabus. Each concept must have:
            - "id": temporary sequential ID: "c1", "c2", "c3"...
-           - "name": clean, concise study unit name (e.g. "Error Detection & Correction" or "Physical Layer").
+           - "name": clean, concise, highly specific study unit name.
            - "description": a short 1-2 sentence description.
            - "difficulty": "easy", "medium", or "hard".
            - "source_hint": a list of objects representing textbook/notes references from the syllabus matching this concept (e.g. [{{"source": "Forouzan", "chapter": "Chapter 10", "edition": "4th Edition"}}]).
@@ -74,12 +81,21 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
     else:
         prompt = f"""
         Extract a list of core concepts to study the topic: "{topic}".
+        
+        CRITICAL GRANULARITY RULE:
+        Do NOT extract broad top-level units or fields. Extract specific, concrete, bullet-level sub-concepts, tools, or algorithms. 
+        For example:
+        - For "Python Programming", extract: "List Comprehensions", "Decorators", "Generator Functions", "Context Managers (with statement)" instead of "Functions" or "Control Flow".
+        - For "Data Structures", extract: "Singly Linked Lists", "Binary Search Trees", "AVL Trees", "Hash Collisions & Resolution" instead of "Trees" or "Linked Lists".
+        
+        Extract exactly {num_concepts} objects representing these granular concepts.
+        
         You MUST return a JSON object with:
         1. "subject_domain": Inferred overall subject domain (e.g. "{topic}").
         2. "source_books": null or an empty list.
         3. "concepts": A list of exactly {num_concepts} objects. Each concept must have:
            - "id": temporary sequential ID: "c1", "c2", "c3"...
-           - "name": clean, concise study unit name.
+           - "name": clean, concise, highly specific study unit name.
            - "description": a short 1-2 sentence description.
            - "difficulty": "easy", "medium", or "hard".
            - "source_hint": null or an empty list.
@@ -189,7 +205,12 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
        📚 **Recommended Reading:**
        {readings_str}
        
-    3. "quiz": A list of exactly 3 quiz questions. The first 2 must be multiple-choice ("type": "mcq") with an "options" list of 4 options and the correct "answer" matching one of the options. The 3rd question must be a short-answer question ("type": "short_answer") with no options and a sample correct "answer".
+    3. "quiz": A list of exactly 3 multiple-choice quiz questions. Each question must have:
+       - "type": "mcq"
+       - "question": a clear, challenging quiz question text targeting this concept
+       - "options": exactly 4 distinct options/choices as a list of strings
+       - "correct_option_index": 0-based integer index of the correct option in the options list (0, 1, 2, or 3)
+       - Do NOT generate short-answer questions or write-in responses. Only multiple-choice.
     4. "resources": A list of exactly 2-3 study resources. Each resource MUST have:
        - "type": "video", "docs", or "article"
        - "title": human-readable title of the resource (e.g. "Physical Layer Explained")

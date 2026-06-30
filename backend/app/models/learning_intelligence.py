@@ -60,31 +60,3 @@ class StudentMistake(Base):
     # Relationships
     plan: Mapped["Plan"] = relationship("Plan")
     concept: Mapped["Concept"] = relationship("Concept")
-
-
-class LearningProfile(Base):
-    __tablename__ = "learning_profiles"
-
-    id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
-    )
-    plan_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("plans.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    concept_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("concepts.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    mastery_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    confidence_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    retention_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    difficulty_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    last_review: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    recommended_action: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Relationships
-    plan: Mapped["Plan"] = relationship("Plan")
-    concept: Mapped["Concept"] = relationship("Concept")

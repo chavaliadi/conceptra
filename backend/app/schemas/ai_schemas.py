@@ -26,8 +26,8 @@ class ExtractResponse(BaseModel):
     @field_validator('concepts')
     @classmethod
     def validate_count(cls, v: List[AIConceptItem]) -> List[AIConceptItem]:
-        if len(v) < 4 or len(v) > 12:
-            raise ValueError("Expected 4 to 12 concepts")
+        if len(v) < 4 or len(v) > 40:
+            raise ValueError("Expected 4 to 40 concepts")
         return v
 
 # --- Stage 2 schemas ---
@@ -53,12 +53,25 @@ class GraphResponse(BaseModel):
             raise ValueError("The dependency graph contains cycles!")
         return edges
 
-# --- Stage 4 schemas ---
 class AIQuizQuestion(BaseModel):
-    type: Literal["mcq", "short_answer"]
-    question: str
-    options: Optional[List[str]] = None
-    answer: str
+    type: Literal["mcq"] = "mcq"
+    question: str = Field(description="Multiple-choice question text")
+    options: List[str] = Field(description="Exactly 4 options for answers")
+    correct_option_index: int = Field(description="The 0-based index of the correct option (0 to 3)")
+
+    @field_validator('options')
+    @classmethod
+    def validate_options_count(cls, v: List[str]) -> List[str]:
+        if len(v) != 4:
+            raise ValueError("Expected exactly 4 options")
+        return v
+
+    @field_validator('correct_option_index')
+    @classmethod
+    def validate_correct_index(cls, v: int) -> int:
+        if v < 0 or v > 3:
+            raise ValueError("Index must be between 0 and 3")
+        return v
 
 class AIResource(BaseModel):
     type: Literal["video", "docs", "article"]
@@ -69,7 +82,7 @@ class AIResource(BaseModel):
 class ConceptContentAI(BaseModel):
     concept_id: str = Field(description="Must match one of the concept IDs from Stage 1")
     explanation: str = Field(description="Detailed explanation with Analogy, Examples, and Reading references in Markdown")
-    quiz: List[AIQuizQuestion] = Field(description="Exactly 3 quiz questions (2 MCQ and 1 short answer)")
+    quiz: List[AIQuizQuestion] = Field(description="Exactly 3 multiple-choice quiz questions")
     resources: List[AIResource] = Field(description="List of 2-3 study resources with platforms & queries")
 
 class BatchContentResponse(BaseModel):
