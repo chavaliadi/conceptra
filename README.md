@@ -1,30 +1,47 @@
-# 🌌 Conceptra: AI-Powered Learning Operating System
+# 🌌 Conceptra: Database-Driven Adaptive Learning Engine
 
-Conceptra is a next-generation **AI-Powered Learning Operating System** that converts unstructured syllabus documents (PDFs) or custom study topics into interactive, personalized, and adaptive study plans.
+Conceptra is a database-driven adaptive learning engine that converts a course syllabus PDF into a dependency graph of concepts, schedules study sessions using a greedy bin-packing algorithm, and tracks mastery over time using SM-2 spaced repetition — adapting the revision schedule based on quiz performance rather than completion.
 
-It generates an optimized **Concept Dependency Graph (DAG)**, maps a week-by-week **Topological Study Schedule** based on your exam date, generates **deep learning summaries and interactive quizzes**, provides a **context-aware AI Tutor with memory**, and supports a **Community Library for sharing and forking** curriculum roadmaps.
-
----
-
-## 🎯 Project Aim & Vision
-
-The core philosophy of Conceptra is that **learning should not be a linear list of chapters, but a dependency-mapped graph of concepts**. 
-
-Most student learning systems suffer from:
-1. **Chapter bloat:** Syllabus documents group atomic technical concepts under generic chapters (e.g. "Chapter 4: Network Protocols" instead of atomic sub-topics like "Address Resolution Protocol (ARP)" or "Distance Vector Routing").
-2. **Self-inflicted schedule bottlenecks:** Static calendars assign equal study time to every topic regardless of cognitive difficulty.
-3. **Split-brain learning tracking:** State profiles and quiz schedules are kept out-of-sync, leading to erratic scheduling.
-4. **Rickrolling reference links:** Generic AI search queries often hallucinate dead URLs or generic video links.
-
-Conceptra solves this by:
-* Parsing syllabus documents into **granular (sub-topic/algorithm level) concepts**.
-* Calculating prerequisites to build a **Directed Acyclic Graph (DAG)** of your knowledge.
-* Packing study plans using a **Greedy Bin-Packing Study Scheduler** with cognitive difficulty costs (easy = 30m, medium = 60m, hard = 90m).
-* Grounding study content with **objective MCQ grading** and an adaptive **SM-2 Spaced-Repetition System** that tracks your mastery and schedules review alerts.
+The LLM in Conceptra is simply one component of a larger system, not the product itself. The LLM handles language tasks (concept extraction, explanation generation, MCQ writing). The application owns everything else: the dependency graph, the student mastery model, the scheduling algorithm, and the adaptive revision logic. This separation means the system's intelligence comes from the data it accumulates about a student over time, not from re-prompting an LLM every session.
 
 ---
 
-## 🏛️ System Architecture
+## 🎯 Core Concept Design: Three-Layer Separation
+
+Conceptra's architecture separates the static syllabus structure, dynamic student state, and the AI synthesis pipeline. This guarantees that student telemetry updates remain deterministic and decoupled from LLM inference latency.
+
+```mermaid
+graph TD
+    subgraph Knowledge ["Knowledge Layer (Static Graph Schema)"]
+        Concepts["Granular Concepts<br>(CRC, TCP Flow Control, ARP)"]
+        Prereqs["DAG Dependencies<br>(Directed Edges)"]
+    end
+    
+    subgraph Student ["Student State Layer (Mastery Registry)"]
+        ProgressTable["Progress Table<br>(mastery_pct, ease_factor, interval_days)"]
+        Attempts["Quiz Attempts<br>(is_correct, confidence, is_flagged)"]
+        Calendar["Bin-Packed Schedule<br>(Topological Study Dates)"]
+    end
+    
+    subgraph AISynthesis ["AI Synthesis & Resolution Layer (LLM Component)"]
+        Extractor["LLM Concept Extractor<br>(Syllabus PDF -> JSON list)"]
+        ResourceResolver["Resource URL Registry<br>(Hallucination-Free platform queries)"]
+        TutorGrounder["Tutor Grounding Context<br>(Quiz mistakes in tutor prompt)"]
+    end
+
+    Extractor -.->|Populates| Knowledge
+    Knowledge -->|Structural Constraints| Calendar
+    ProgressTable -->|SM-2 Math Updates| Calendar
+    Attempts -->|Updates| ProgressTable
+    ProgressTable -->|Adaptation Signal| TutorGrounder
+    TutorGrounder -.->|Personalizes| Student
+```
+
+---
+
+## 🏛️ System Architecture & Observability
+
+Conceptra is built with a decoupled FastAPI backend, a responsive React frontend, and an asynchronous background worker architecture running locally. Prometheus metrics and Sentry error tracking are instrumented directly at the API layer for production-grade observability and runtime telemetry.
 
 ```mermaid
 graph TD
@@ -87,7 +104,7 @@ graph TD
 ### 1. Asynchronous Multi-Stage AI Pipeline
 When a user uploads a syllabus PDF or types a study topic:
 1. **Syllabus Text Extraction:** The system extracts the raw text layer, verifying it is search-friendly (rejecting image-only scans).
-2. **Concept Extraction (Stage 1):** The text is parsed by the LLM into 4–40 granular concepts with individual titles, descriptions, and difficulty weights.
+2. **Concept Extraction (Stage 1):** Syllabus documents group dozens of examinable sub-topics under generic chapter headings. Conceptra extracts them at the concept level — CRC, Hamming Distance, Go-Back-N — giving the scheduler and mastery tracker something meaningful to operate on. It extracts 4–40 granular concepts with individual titles, descriptions, and difficulty weights.
 3. **Dependency Graphing (Stage 2):** Prerequisites are built dynamically. A Cycle-Detection validator ensures the graph is a Directed Acyclic Graph (DAG) with no loops.
 4. **Bin-Packing Study Scheduler (Stage 3):** The scheduler distributes concepts over daily hours budgets using difficulty weights.
 5. **Content Synthesis (Stage 4):** Summaries, Handpicked Resources (Wiki, YouTube queries resolved server-side to prevent link rot), and MCQs are synthesized.
@@ -183,6 +200,19 @@ When the user chats with the AI Tutor for a specific concept:
    * Current student mastery scores (mastery, confidence level, attempts count).
    * Specific misconceptions: *"The user chose option A (incorrect) instead of option B (correct) for question X."*
 3. The AI Tutor adapts its response style to address the specific misconception and student capability level directly.
+
+---
+
+## ⚖️ Key Design Decisions
+
+During implementation, the following architectural trade-offs were made:
+
+| Decision Area | Chosen Approach | Rationale & Alternatives Considered |
+| :--- | :--- | :--- |
+| **Study Scheduling** | **SM-2 (SuperMemo-2) SRS Algorithm** | **Alternative:** Custom linear heuristic math.<br>**Rationale:** SM-2 is a mathematically proven intervals progression algorithm. It yields a smooth retention curve and scales intervals predictably, preventing review overload. |
+| **Quiz Grading** | **MCQ + Self-Reported Confidence Selector** | **Alternative:** LLM-graded open-ended text answers.<br>**Rationale:** Semantically grading free text with an LLM introduces grading variance (nondeterministic scores), increases token costs, and introduces high API latency. Pure MCQ index validation runs in sub-millisecond cycles with deterministic precision. |
+| **Study Resources** | **Structured Platform + Search Query Registry** | **Alternative:** Direct URL generation by LLM.<br>**Rationale:** LLMs frequently hallucinate URLs, causing dead links. The registry maps resolved platform templates (Wikipedia, Neso Academy) to dynamic search terms, guaranteeing zero broken links. |
+| **State Management** | **Progress Table Single-Source-of-Truth** | **Alternative:** Double-table tracking (LearningProfile + Progress).<br>**Rationale:** Storing state across two tables with divergent math causes split-brain progress sync. Unifying tracking directly in the `Progress` table ensures consistency. |
 
 ---
 
@@ -298,13 +328,4 @@ For background generation, you need to run the RQ worker.
    npm run dev
    ```
    * The frontend runs at `http://localhost:5173`
-
----
-
-## 📈 Monitoring & Observability
-
-Conceptra compiles system logs and analytics natively:
-
-1. **Benchmark Telemetry Dashboard:** Access `http://localhost:5173/benchmarks` to view LLM latencies, stage durations (extraction, scheduling, graph creation, content synth), token costs, and cache hit metrics.
-2. **Prometheus Metrics:** Scrape system performance from `http://127.0.0.1:8000/metrics`.
-3. **Sentry Dashboard:** Any unhandled FastAPI server-side exceptions will automatically pipe to Sentry for review.
+   * Benchmark telemetry values can be viewed at `http://localhost:5173/benchmarks`
