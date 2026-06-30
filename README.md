@@ -6,9 +6,25 @@ It generates an optimized **Concept Dependency Graph (DAG)**, maps a week-by-wee
 
 ---
 
-## 🏛️ System Architecture
+## 🎯 Project Aim & Vision
 
-Conceptra is built with a decoupled FastAPI backend, a responsive React frontend, and an asynchronous background worker architecture running locally.
+The core philosophy of Conceptra is that **learning should not be a linear list of chapters, but a dependency-mapped graph of concepts**. 
+
+Most student learning systems suffer from:
+1. **Chapter bloat:** Syllabus documents group atomic technical concepts under generic chapters (e.g. "Chapter 4: Network Protocols" instead of atomic sub-topics like "Address Resolution Protocol (ARP)" or "Distance Vector Routing").
+2. **Self-inflicted schedule bottlenecks:** Static calendars assign equal study time to every topic regardless of cognitive difficulty.
+3. **Split-brain learning tracking:** State profiles and quiz schedules are kept out-of-sync, leading to erratic scheduling.
+4. **Rickrolling reference links:** Generic AI search queries often hallucinate dead URLs or generic video links.
+
+Conceptra solves this by:
+* Parsing syllabus documents into **granular (sub-topic/algorithm level) concepts**.
+* Calculating prerequisites to build a **Directed Acyclic Graph (DAG)** of your knowledge.
+* Packing study plans using a **Greedy Bin-Packing Study Scheduler** with cognitive difficulty costs (easy = 30m, medium = 60m, hard = 90m).
+* Grounding study content with **objective MCQ grading** and an adaptive **SM-2 Spaced-Repetition System** that tracks your mastery and schedules review alerts.
+
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
 graph TD
@@ -16,7 +32,7 @@ graph TD
     
     subgraph Frontend ["React Frontend (Vite + TypeScript)"]
         Dashboard["Dashboard & Graph View"]
-        TutorDrawer["AI Tutor Drawer & Soft-Grading"]
+        TutorDrawer["AI Tutor Drawer & MCQ Quiz"]
         CommunityLibrary["Community Library & Forking"]
         SSEListener["SSE Progress Listener"]
     end
@@ -39,7 +55,7 @@ graph TD
     end
 
     User -->|Interacts| Dashboard
-    User -->|Chat / Quiz / Explainers| TutorDrawer
+    User -->|Chat / MCQ Quiz / Explainers| TutorDrawer
     User -->|Browse / Fork Plans| CommunityLibrary
     
     Dashboard -->|POST /api/v2/plans| RateLimiter
@@ -66,36 +82,130 @@ graph TD
 
 ---
 
-## ✨ Features at a Glance
+## 🔄 Core Workflows & Logic
 
-### 1. Multi-Stage Asynchronous AI Pipeline (RQ Worker)
-* **Stage 1: Concept Extraction:** Extracts core concepts from your syllabus topic or text-based PDF.
-* **Stage 2: Dependency Graphing:** Builds a clean Directed Acyclic Graph (DAG) representing concept prerequisites.
-* **Stage 3: Topological Schedule Planner:** Calculates a customized week-by-week calendar based on constraints.
-* **Stage 4: Explanation & Quiz Synthesis:** Automatically generates markdown summaries, study resources, and quizzes.
+### 1. Asynchronous Multi-Stage AI Pipeline
+When a user uploads a syllabus PDF or types a study topic:
+1. **Syllabus Text Extraction:** The system extracts the raw text layer, verifying it is search-friendly (rejecting image-only scans).
+2. **Concept Extraction (Stage 1):** The text is parsed by the LLM into 4–40 granular concepts with individual titles, descriptions, and difficulty weights.
+3. **Dependency Graphing (Stage 2):** Prerequisites are built dynamically. A Cycle-Detection validator ensures the graph is a Directed Acyclic Graph (DAG) with no loops.
+4. **Bin-Packing Study Scheduler (Stage 3):** The scheduler distributes concepts over daily hours budgets using difficulty weights.
+5. **Content Synthesis (Stage 4):** Summaries, Handpicked Resources (Wiki, YouTube queries resolved server-side to prevent link rot), and MCQs are synthesized.
 
-### 2. Conversational AI Tutor drawer with Memory (Phase 5)
-* **Personalized Tutor:** Adapts to the student's mastery profile and focuses explanation detail dynamically.
-* **Soft Grading API:** Evaluates open-ended answers with structured critique rather than binary scoring.
-* **Edge Explainer Modal:** Explains *why* one concept is a prerequisite for another on graph edge click.
-* **Weekly Performance Digest:** Summarizes student progress, lists frequent mistakes, and provides revision suggestions.
-* **Visual Graph Animations:** Node confidence rings animate based on mastery; edges brighten when concepts are learned.
+```mermaid
+sequenceDiagram
+    participant U as User Browser
+    participant API as FastAPI Server
+    participant Redis as Redis Queue
+    participant W as RQ Worker
+    participant LLM as Groq LLM
+    participant DB as PostgreSQL
 
-### 3. Community Knowledge sharing (Phase 4)
-* **Library Board:** Browse user-published plans with search, sort, and tag filtering.
-* **Forks/Clones:** Fork any public plan to make it your own; includes Clerk sign-in gates to protect user associations.
-* **Searchable PDF Validator:** Real-time text-layer check on PDF syllabus uploads to reject image-only scans.
-
-### 4. Telemetry, Analytics, & Observability (Phase 6)
-* **API Usage Logs:** Tracks token counts, execution latencies, and generation costs per pipeline step.
-* **Observability Dashboard:** Displays metrics on avg latency, cache hit ratios, token metrics, and API costs.
-* **FastAPI Middleware:** SlowAPI rate limiting (`5/hour` on creation), Prometheus `/metrics` exporter, and Sentry middleware.
+    U->>API: Upload Syllabus PDF / Topic
+    API->>DB: Initialize Plan (Status: generating)
+    API->>Redis: Enqueue Plan Generation Job
+    API-->>U: SSE Connection Established (Listen to Plan UUID)
+    
+    W->>Redis: Pick Up Job
+    W->>LLM: Step 1: Extract Granular Concepts (4-40 items)
+    LLM-->>W: Concept List (easy/medium/hard)
+    W->>LLM: Step 2: Determine Prerequisites
+    LLM-->>W: Prerequisite Edges List
+    W->>W: Perform Cycle Detection & Topological Sort
+    W->>W: Step 3: Run Greedy Bin-Packing Study Scheduler
+    W->>LLM: Step 4: Synthesize Study Guide Content & Quizzes
+    LLM-->>W: Concept explanations & 3x MCQs per concept
+    W->>DB: Save Concepts, Edges, Schedule, & Content
+    W->>Redis: Publish progress: "completed"
+    Redis-->>U: SSE message: "completed" (Redirects dashboard)
+```
 
 ---
 
-## 🛠️ Local Development Setup
+### 2. Spaced Repetition (SM-2) Grading & Mastery Loop
+Conceptra tracks learning progress natively through objective quizzes.
 
-Follow these instructions to run the entire stack locally.
+```mermaid
+flowchart TD
+    Start([Quiz Checkpoint Opened]) --> SelectAnswer[User selects MCQ Option]
+    SelectAnswer --> RateConfidence[User rates confidence: Guessing / Somewhat / Confident]
+    RateConfidence --> Submit[Submit payload to /quiz/grade]
+    Submit --> CheckIndex{Is selected_option_index == correct_option_index?}
+    
+    CheckIndex -->|Yes| Correct[is_correct = True]
+    CheckIndex -->|No| Incorrect[is_correct = False]
+    
+    Correct --> MapQualityCorrect{Confidence reported?}
+    Incorrect --> MapQualityIncorrect{Confidence reported?}
+    
+    MapQualityCorrect -->|💪 Confident| Q5[Quality = 5]
+    MapQualityCorrect -->|🤔 Somewhat / 😰 Guessing| Q3[Quality = 3]
+    
+    MapQualityIncorrect -->|😰 Guessing / 🤔 Somewhat| Q2[Quality = 2]
+    MapQualityIncorrect -->|💪 Confident| Q1[Quality = 1: Penalized False Confidence]
+    
+    Q5 & Q3 & Q2 & Q1 --> UpdateSM2[Calculate repetitions, ease_factor, interval_days]
+    UpdateSM2 --> Persist[Update Progress Table & Log QuizAttempt]
+    Persist --> End([Mastery scores & schedule updated])
+```
+
+#### SM-2 Mathematical Blend
+Backend grading compares selected indices directly:
+* **Correct + high confidence (1.00)** $\rightarrow$ Blends to Quality Score **5**.
+* **Correct + low confidence (0.25 / 0.50)** $\rightarrow$ Blends to Quality Score **3**.
+* **Incorrect + low confidence (0.25 / 0.50)** $\rightarrow$ Blends to Quality Score **2**.
+* **Incorrect + high confidence (1.00)** $\rightarrow$ Blends to Quality Score **1** *(confident incorrect, heavily penalized to trigger immediate review)*.
+
+Mastery updates are bounded:
+$$\text{new\_mastery} = \max(0.0, \min(100.0, \text{current\_mastery} + \Delta))$$
+The next review date is scheduled as:
+$$\text{next\_review\_at} = \text{now} + \Delta\text{interval\_days}$$
+
+---
+
+### 3. Study Calendar Bin-Packing Logic
+Instead of placing topics sequentially on subsequent calendar slots, Conceptra packs them greedily:
+* **Prerequisites First:** We perform a topological sort of the graph to ensure prerequisites always precede dependent topics.
+* **Difficulty Cost Assignment:** Each topic has a time cost based on its cognitive difficulty:
+  * `easy` $\rightarrow$ 30 minutes
+  * `medium` $\rightarrow$ 60 minutes
+  * `hard` $\rightarrow$ 90 minutes
+* **Daily Budget Constraints:** Daily slots are limited by the user's `hours_per_day` budget.
+* **Greedy Allocation:** The scheduler loops over the sorted concepts list, packing them sequentially into Day 1, Day 2, etc. If a concept's cost exceeds the remaining day budget, it rolls over to the next day's budget.
+* **Spaced Repetition Review Queues:** Concepts due for review are loaded from the `Progress` table, sorted topologically, and prioritized by lowest mastery percentage using Kahn's algorithm.
+
+---
+
+### 4. AI Tutor Misconception Grounding
+When the user chats with the AI Tutor for a specific concept:
+1. The backend runs a query over `QuizAttempt` to fetch the top 3 confident-incorrect attempts for that concept.
+2. The tutor prompt is customized with:
+   * Current student mastery scores (mastery, confidence level, attempts count).
+   * Specific misconceptions: *"The user chose option A (incorrect) instead of option B (correct) for question X."*
+3. The AI Tutor adapts its response style to address the specific misconception and student capability level directly.
+
+---
+
+## 🔑 Required API Keys & Environment Variables
+
+Conceptra depends on a few configuration keys:
+
+| Environment Variable | Where it goes | Purpose | Value Example |
+| :--- | :--- | :--- | :--- |
+| `DATABASE_URL` | Backend `.env` | Async Connection string for PostgreSQL database | `postgresql+asyncpg://postgres:postgres@localhost:5435/conceptra` |
+| `REDIS_URL` | Backend `.env` | Redis connection URL for background jobs / SSE | `redis://localhost:6379` |
+| `GROQ_API_KEY` | Backend `.env` | Access token for llama-3.1-70b-versatile pipelines | `gsk_XYZ123...` |
+| `CLERK_SECRET_KEY` | Backend `.env` | Clerk secret API key to validate JWT auth headers | `sk_test_XYZ...` |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Backend `.env` | Clerk publishable public identifier | `pk_test_XYZ...` |
+| `SENTRY_DSN` | Backend `.env` | (Optional) Error monitoring tracking endpoint | `https://sentry_endpoint...` |
+| `VITE_API_VERSION` | Frontend `.env.local` | API version router prefix | `v2` |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend `.env.local` | Clerk publishable key for client sign-in checks | `pk_test_XYZ...` |
+
+---
+
+## 🛠️ Step-by-Step Setup Guide
+
+Follow these instructions to clone and run the entire stack locally.
 
 ### Prerequisites
 * **Python:** version 3.10+
@@ -106,13 +216,10 @@ Follow these instructions to run the entire stack locally.
 ---
 
 ### 1. Database Setup
-
 Create a PostgreSQL database named `conceptra`.
 ```sql
 CREATE DATABASE conceptra;
 ```
-
-*(Note: If running PostgreSQL on a standard port or custom port, configure it inside backend `.env` accordingly).*
 
 ---
 
@@ -132,14 +239,13 @@ CREATE DATABASE conceptra;
    ```bash
    pip install -r requirements.txt
    ```
-4. Create a `.env` file in the `backend/` folder:
+4. Create a `.env` file in the `backend/` folder and populate it with your API keys:
    ```env
-   DATABASE_URL=postgresql+asyncpg://localhost:5435/conceptra
+   DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5435/conceptra
    REDIS_URL=redis://localhost:6379
    GROQ_API_KEY=your_groq_api_key_here
-   SENTRY_DSN=optional_sentry_dsn_here
-   CLERK_SECRET_KEY=your_clerk_secret_key
-   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+   CLERK_SECRET_KEY=your_clerk_secret_key_here
+   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
    ```
 5. Apply database schema migrations:
    ```bash
@@ -150,7 +256,7 @@ CREATE DATABASE conceptra;
    uvicorn app.main:app --reload --port 8000
    ```
    * The API runs at `http://127.0.0.1:8000`
-   * API documentation is at `http://127.0.0.1:8000/docs`
+   * Swagger docs are at `http://127.0.0.1:8000/docs`
 
 ---
 
@@ -162,12 +268,13 @@ For background generation, you need to run the RQ worker.
 2. Navigate to the `backend/` directory and activate the virtual environment:
    ```bash
    cd backend
+   source .venv/bin/activate
    ```
 3. Run the worker script:
    ```bash
    python -m app.worker
    ```
-   * The worker listens to the `default` Redis queue and processes LLM completions synchronously while pushing SSE progress streams.
+   * The worker listens to the `default` Redis queue and executes the multi-stage generation.
 
 ---
 
@@ -184,7 +291,7 @@ For background generation, you need to run the RQ worker.
 3. Create a `.env.local` file inside the `frontend/` folder:
    ```env
    VITE_API_VERSION=v2
-   VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+   VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
    ```
 4. Start the frontend Vite development server:
    ```bash
@@ -194,16 +301,10 @@ For background generation, you need to run the RQ worker.
 
 ---
 
-## 📈 Monitoring & Telemetry
+## 📈 Monitoring & Observability
 
 Conceptra compiles system logs and analytics natively:
 
-1. **Benchmark Telemetry Dashboard:** Access `http://localhost:5173/benchmarks` to view LLM latencies, stages duration (extraction, scheduling, graph creation, content synth), token costs, and cache hit metrics.
+1. **Benchmark Telemetry Dashboard:** Access `http://localhost:5173/benchmarks` to view LLM latencies, stage durations (extraction, scheduling, graph creation, content synth), token costs, and cache hit metrics.
 2. **Prometheus Metrics:** Scrape system performance from `http://127.0.0.1:8000/metrics`.
 3. **Sentry Dashboard:** Any unhandled FastAPI server-side exceptions will automatically pipe to Sentry for review.
-
----
-
-## 🚀 Deployment Guide
-
-To deploy this application to production platforms (FastAPI API server and RQ worker to **Railway**, Vite frontend to **Vercel**), refer to the detailed [Deployment Guide](file:///Users/srinivasch/Documents/Projects/Conceptra/deployment.md).
