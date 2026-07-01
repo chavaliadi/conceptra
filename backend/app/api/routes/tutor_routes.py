@@ -535,11 +535,35 @@ async def get_weekly_report(
 
     avg_confidence = total_confidence / progress_count if progress_count > 0 else 0.0
 
+    # Overconfident topics: incorrect answers with high self-reported confidence (>= 0.7)
+    from sqlalchemy import func as sqlfunc
+    overconfident_stmt = (
+        select(
+            Concept.name,
+            sqlfunc.count(QuizAttempt.id).label("false_confidence_count")
+        )
+        .join(Concept, Concept.id == QuizAttempt.concept_id)
+        .where(
+            QuizAttempt.plan_id == plan_id,
+            QuizAttempt.is_correct == False,
+            QuizAttempt.confidence_reported >= 0.7,
+        )
+        .group_by(Concept.name)
+        .order_by(sqlfunc.count(QuizAttempt.id).desc())
+        .limit(5)
+    )
+    overconfident_res = (await db.execute(overconfident_stmt)).all()
+    overconfident_topics = [
+        {"concept": row.name, "false_confidence_count": row.false_confidence_count}
+        for row in overconfident_res
+    ]
+
     # Build prompt for AI recommended action
     weaknesses_str = ", ".join(weakness_names) if weakness_names else "none"
+    overconfident_str = ", ".join([f"{t['concept']} ({t['false_confidence_count']}x)" for t in overconfident_topics]) if overconfident_topics else "none"
     
     system_prompt = """You are a supportive, insightful educational coach.
-Based on the student's progress stats, output a concise 1-2 sentence recommendation for their study.
+Based on the student's progress stats and identified misconceptions, output a concise 1-2 sentence recommendation for their study.
 Be specific and encouraging. Keep it short.
 """
     prompt = f"""Curriculum Topic: "{plan.topic}"
@@ -547,6 +571,7 @@ Progress Summary:
 - Mastered Concepts: {mastered_count} out of {total_concepts}
 - Average Confidence: {avg_confidence:.1f}%
 - Identified Weakness Topics: {weaknesses_str}
+- Overconfident Misconceptions: {overconfident_str}
 
 Give a direct recommendation for what the student should focus on:
 """
@@ -567,6 +592,7 @@ Give a direct recommendation for what the student should focus on:
         "total_concepts": total_concepts,
         "average_confidence": round(avg_confidence, 1),
         "weaknesses": weakness_names,
+        "overconfident_topics": overconfident_topics,
         "recommendation": recommendation.strip(),
     }
 

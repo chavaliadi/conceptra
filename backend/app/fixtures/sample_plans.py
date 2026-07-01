@@ -60,30 +60,34 @@ def _os_plan_template() -> dict:
                 QuizQuestion(
                     type="mcq",
                     question="What do threads within the same process share?",
-                    options=["Stack", "Registers",
-                             "Address space", "Program counter"],
-                    answer="Address space",
+                    options=["Stack", "Registers", "Address space", "Program counter"],
+                    correct_option_index=2,
                 ),
                 QuizQuestion(
                     type="mcq",
                     question="Which component creates the illusion of parallel execution on one CPU?",
-                    options=["Compiler", "OS scheduler",
-                             "File system", "Cache"],
-                    answer="OS scheduler",
+                    options=["Compiler", "OS scheduler", "File system", "Cache"],
+                    correct_option_index=1,
                 ),
                 QuizQuestion(
-                    type="short_answer",
-                    question="Explain the difference between a process and a thread in one sentence.",
-                    answer="A process is an independent program instance with its own resources; a thread is a unit of execution inside a process that shares its memory.",
+                    type="mcq",
+                    question="Which of the following is true about process vs thread memory resource sharing?",
+                    options=[
+                        "Threads share process memory; processes have independent scopes",
+                        "Processes share thread memory; threads have independent scopes",
+                        "Threads have completely independent resource scopes",
+                        "Processes are lightweight units of execution inside a thread"
+                    ],
+                    correct_option_index=0,
                 ),
             ],
             resources=[
                 Resource(type="video", title="Processes vs Threads Explained",
-                         url="https://www.youtube.com/watch?v=4rXWV_HA2Tg"),
+                          url="https://www.youtube.com/watch?v=4rXWV_HA2Tg"),
                 Resource(type="docs", title="OS Processes — GeeksforGeeks",
-                         url="https://www.geeksforgeeks.org/operating-system-processes/"),
+                          url="https://www.geeksforgeeks.org/operating-system-processes/"),
                 Resource(type="article", title="Threads and Processes",
-                         url="https://en.wikipedia.org/wiki/Thread_(computing)"),
+                          url="https://en.wikipedia.org/wiki/Thread_(computing)"),
             ],
         ),
         "c6": ConceptContent(
@@ -104,27 +108,33 @@ def _os_plan_template() -> dict:
                         "CPU resets",
                         "File is deleted",
                     ],
-                    answer="OS loads the page from disk",
+                    correct_option_index=1,
                 ),
                 QuizQuestion(
                     type="mcq",
                     question="Which hardware unit translates virtual to physical addresses?",
                     options=["MMU", "GPU", "NIC", "DMA controller"],
-                    answer="MMU",
+                    correct_option_index=0,
                 ),
                 QuizQuestion(
-                    type="short_answer",
-                    question="Why does paging reduce external fragmentation?",
-                    answer="Fixed-size pages can be placed in any available frame without leaving unusable gaps between allocations.",
+                    type="mcq",
+                    question="Why does paging reduce external fragmentation in memory?",
+                    options=[
+                        "Paging splits memory into fixed-size pages that can fit any frame",
+                        "Paging allocates memory in variable-size continuous partitions",
+                        "Paging completely bypasses virtual memory mapping",
+                        "Paging merges physical frames dynamically on every lookup"
+                    ],
+                    correct_option_index=0,
                 ),
             ],
             resources=[
                 Resource(type="video", title="Paging Explained",
-                         url="https://www.youtube.com/watch?v=6R3C9ne79kM"),
+                          url="https://www.youtube.com/watch?v=6R3C9ne79kM"),
                 Resource(type="docs", title="Paging — OS Notes",
-                         url="https://www.geeksforgeeks.org/paging-in-operating-system/"),
+                          url="https://www.geeksforgeeks.org/paging-in-operating-system/"),
                 Resource(type="article", title="Virtual Memory and Paging",
-                         url="https://en.wikipedia.org/wiki/Paging"),
+                          url="https://en.wikipedia.org/wiki/Paging"),
             ],
         ),
     }
@@ -137,9 +147,8 @@ def _os_plan_template() -> dict:
                     QuizQuestion(
                         type="mcq",
                         question=f"What is {concept.name} primarily about?",
-                        options=["Placeholder A", concept.name,
-                                 "Placeholder C", "Placeholder D"],
-                        answer=concept.name,
+                        options=["Placeholder A", concept.name, "Placeholder C", "Placeholder D"],
+                        correct_option_index=1,
                     ),
                 ],
                 resources=[
@@ -191,12 +200,12 @@ def _react_plan_template() -> dict:
                     type="mcq",
                     question=f"Which concept covers: {concept.description}?",
                     options=["Vue", concept.name, "Angular", "Svelte"],
-                    answer=concept.name,
+                    correct_option_index=1,
                 ),
             ],
             resources=[
                 Resource(type="docs", title="React Docs",
-                         url="https://react.dev"),
+                          url="https://react.dev"),
             ],
         )
         for concept in concepts
@@ -247,16 +256,15 @@ def _python_fundamentals_template() -> dict:
                 QuizQuestion(
                     type="mcq",
                     question=f"What is the primary purpose of {concept.name.lower()}?",
-                    options=["Data storage", concept.description,
-                             "Memory management", "Network communication"],
-                    answer=concept.description,
+                    options=["Data storage", concept.description, "Memory management", "Network communication"],
+                    correct_option_index=1,
                 ),
             ],
             resources=[
                 Resource(type="docs", title="Python Official Docs",
-                         url="https://docs.python.org/3/"),
+                          url="https://docs.python.org/3/"),
                 Resource(type="video", title="Python Tutorial",
-                         url="https://www.youtube.com/results?search_query=python+tutorial"),
+                          url="https://www.youtube.com/results?search_query=python+tutorial"),
             ],
         )
         for concept in concepts
@@ -312,16 +320,15 @@ def _data_structures_template() -> dict:
                 QuizQuestion(
                     type="mcq",
                     question=f"What is the key characteristic of {concept.name}?",
-                    options=["Slow access", concept.description,
-                             "Limited storage", "Single-threaded"],
-                    answer=concept.description,
+                    options=["Slow access", concept.description, "Limited storage", "Single-threaded"],
+                    correct_option_index=1,
                 ),
             ],
             resources=[
                 Resource(type="docs", title="Data Structures Guide",
-                         url="https://www.geeksforgeeks.org/data-structures/"),
+                          url="https://www.geeksforgeeks.org/data-structures/"),
                 Resource(type="video", title="Data Structures Course",
-                         url="https://www.youtube.com/results?search_query=data+structures+course"),
+                          url="https://www.youtube.com/results?search_query=data+structures+course"),
             ],
         )
         for concept in concepts
@@ -372,16 +379,15 @@ def _web_development_template() -> dict:
                 QuizQuestion(
                     type="mcq",
                     question=f"Why is {concept.name} important in web development?",
-                    options=["Legacy reasons", concept.description,
-                             "Tradition", "Complexity"],
-                    answer=concept.description,
+                    options=["Legacy reasons", concept.description, "Tradition", "Complexity"],
+                    correct_option_index=1,
                 ),
             ],
             resources=[
                 Resource(type="docs", title="MDN Web Docs",
-                         url="https://developer.mozilla.org/"),
+                          url="https://developer.mozilla.org/"),
                 Resource(type="video", title="Web Development Tutorial",
-                         url="https://www.youtube.com/results?search_query=web+development+course"),
+                          url="https://www.youtube.com/results?search_query=web+development+course"),
             ],
         )
         for concept in concepts

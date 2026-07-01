@@ -1,5 +1,8 @@
 import urllib.parse
-from typing import Dict
+import logging
+from typing import Dict, List
+
+logger = logging.getLogger(__name__)
 
 # Dictionary mapping platform name to search/direct URL template
 PLATFORM_TEMPLATES: Dict[str, str] = {
@@ -34,9 +37,31 @@ def resolve_resource_url(resource_type: str, platform: str, query: str) -> str:
         return template.format(query=query_encoded)
         
     # Tier 2 Fallback
+    logger.warning(f"[platform_registry] Tier-2 fallback: platform='{platform}', type='{resource_type}', query='{query}'")
     if resource_type == "video":
         # YouTube fallback search query
         return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(platform + ' ' + query)}"
     
     # Generic Google search fallback for docs/articles
     return f"https://www.google.com/search?q={urllib.parse.quote_plus(platform + ' ' + query)}"
+
+
+SUBJECT_PLATFORM_MAP: Dict[str, List[str]] = {
+    "computer networks": ["neso academy", "gate smashers", "computerphile", "cisco networking academy"],
+    "data structures": ["gate smashers", "freecodecamp", "geeksforgeeks"],
+    "algorithms": ["gate smashers", "freecodecamp", "geeksforgeeks"],
+    "operating systems": ["neso academy", "gate smashers", "geeksforgeeks"],
+    "database": ["geeksforgeeks", "mdn web docs", "freecodecamp"],
+    "web": ["mdn web docs", "freecodecamp", "geeksforgeeks"],
+    "_default": ["geeksforgeeks", "wikipedia", "freecodecamp"],
+}
+
+def get_preferred_platforms(subject_domain: str | None) -> List[str]:
+    """Return preferred platform names for a given subject domain."""
+    if not subject_domain:
+        return SUBJECT_PLATFORM_MAP["_default"]
+    domain_lower = subject_domain.strip().lower()
+    for key in SUBJECT_PLATFORM_MAP:
+        if key != "_default" and key in domain_lower:
+            return SUBJECT_PLATFORM_MAP[key]
+    return SUBJECT_PLATFORM_MAP["_default"]

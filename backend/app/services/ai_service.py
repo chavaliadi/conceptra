@@ -164,7 +164,7 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
                 raise RuntimeError(f"Failed to generate dependency graph after 5 attempts: {e}")
             await _handle_retry_sleep(attempt, e)
 
-async def generate_single_concept_content(concept: AIConceptItem) -> ConceptContentAI:
+async def generate_single_concept_content(concept: AIConceptItem, subject_domain: str | None = None) -> ConceptContentAI:
     """Generate detailed explanation, quiz, and resources for a single concept with up to 5 retries."""
     system_prompt = "You are an elite technical educator who creates high-quality learning content and outputs JSON."
     
@@ -174,6 +174,10 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
         readings_str = "\n".join([f"* {r.source}: Chapter {r.chapter or ''}" for r in concept.recommended_reading])
     else:
         readings_str = "* General reference resources."
+
+    from app.core.platform_registry import get_preferred_platforms
+    preferred = get_preferred_platforms(subject_domain)
+    preferred_formatted = ", ".join([f'"{p.title()}"' for p in preferred])
 
     prompt = f"""
     Generate detailed explanation, quiz, and resources for the following concept:
@@ -214,7 +218,7 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
     4. "resources": A list of exactly 2-3 study resources. Each resource MUST have:
        - "type": "video", "docs", or "article"
        - "title": human-readable title of the resource (e.g. "Physical Layer Explained")
-       - "platform": the target platform name. Choose from: "Neso Academy", "Gate Smashers", "freeCodeCamp", "Wikipedia", "GeeksforGeeks", "Cisco Networking Academy", "MDN Web Docs", "Microsoft Learn", "Official Documentation".
+       - "platform": the target platform name. Choose from: {preferred_formatted}, or fall back to standard documentations like "Wikipedia", "GeeksforGeeks", "MDN Web Docs", "Official Documentation".
        - "query": search keywords for this platform (e.g. "Physical Layer Data Communication", "OSI reference model", "checksum calculation tutorial").
        - Do NOT include any "url" key.
     """
@@ -232,7 +236,7 @@ async def generate_single_concept_content(concept: AIConceptItem) -> ConceptCont
                 raise RuntimeError(f"Failed to generate content for concept {concept.name} after 5 attempts: {e}")
             await _handle_retry_sleep(attempt, e)
 
-async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContentAI]:
+async def generate_content(concepts: List[AIConceptItem], subject_domain: str | None = None) -> List[ConceptContentAI]:
     """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
     # Semaphore(4): allow up to 4 concurrent Groq calls.
     # llama-3.3-70b-versatile TPM limit is 12k; each content call uses ~600 tokens max,
@@ -243,7 +247,7 @@ async def generate_content(concepts: List[AIConceptItem]) -> List[ConceptContent
     
     async def sem_task(concept: AIConceptItem) -> ConceptContentAI:
         async with semaphore:
-            return await generate_single_concept_content(concept)
+            return await generate_single_concept_content(concept, subject_domain)
             
     tasks = [sem_task(c) for c in concepts]
     results = await asyncio.gather(*tasks)

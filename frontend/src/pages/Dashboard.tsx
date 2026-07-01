@@ -149,7 +149,7 @@ export default function Dashboard() {
               <p className="text-xs text-slate-500">Compiling your performance digest...</p>
             </div>
           ) : weeklyReport ? (
-            <div className="grid gap-6 md:grid-cols-3">
+            <div className="grid gap-6 md:grid-cols-4">
               {/* Stat 1 */}
               <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-900 space-y-1.5">
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Mastery Pacing</span>
@@ -194,8 +194,25 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Stat 4: Overconfident Topics */}
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-amber-500/10 space-y-1.5">
+                <span className="text-[10px] text-amber-500 font-bold uppercase tracking-wider">⚠️ Overconfident Topics</span>
+                <div className="flex flex-col gap-1 mt-1 overflow-y-auto max-h-[42px]">
+                  {!weeklyReport.overconfident_topics || weeklyReport.overconfident_topics.length === 0 ? (
+                    <span className="text-slate-400 text-xs py-0.5">None! Great calibration! 🎯</span>
+                  ) : (
+                    weeklyReport.overconfident_topics.map((t: any) => (
+                      <div key={t.concept} className="flex justify-between items-center text-[10px] leading-tight">
+                        <span className="text-slate-300 truncate max-w-[90px]" title={t.concept}>{t.concept}</span>
+                        <span className="text-amber-400 font-bold shrink-0">{t.false_confidence_count}× missed</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
               {/* AI Coach recommendation */}
-              <div className="md:col-span-3 bg-violet-900/10 border border-violet-900/20 p-4 rounded-2xl">
+              <div className="md:col-span-4 bg-violet-900/10 border border-violet-900/20 p-4 rounded-2xl">
                 <h4 className="text-xs font-bold text-violet-400 uppercase tracking-wider mb-1.5">Coach Recommendation</h4>
                 <p className="text-xs leading-relaxed text-slate-300 italic">
                   &quot;{weeklyReport.recommendation}&quot;

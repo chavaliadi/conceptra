@@ -80,10 +80,12 @@ async def generate_plan_background(
             id_map: dict[str, UUID] = {}
             
             # Insert concepts
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
             for c in concepts:
                 source_hints_dicts = [sh.model_dump() for sh in c.source_hint] if c.source_hint else None
                 rec_read_dicts = [rr.model_dump() for rr in c.recommended_reading] if c.recommended_reading else None
-                concept = Concept(
+                
+                stmt = pg_insert(Concept).values(
                     plan_id=plan_id,
                     name=c.name,
                     description=c.description,
@@ -94,9 +96,27 @@ async def generate_plan_background(
                     recommended_reading=rec_read_dicts,
                     is_inferred_reading=c.is_inferred_reading
                 )
-                db.add(concept)
-                await db.flush()
-                id_map[c.id] = concept.id
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_concept_plan_name",
+                    set_={
+                        "description": stmt.excluded.description,
+                        "difficulty": stmt.excluded.difficulty,
+                        "source_hint": stmt.excluded.source_hint,
+                        "is_inferred_reading": stmt.excluded.is_inferred_reading,
+                        "recommended_reading": stmt.excluded.recommended_reading,
+                    }
+                )
+                await db.execute(stmt)
+                
+                # Fetch the id explicitly to avoid returning None on conflict path
+                concept_id_result = await db.execute(
+                    select(Concept.id).where(
+                        Concept.plan_id == plan_id,
+                        Concept.name == c.name
+                    )
+                )
+                concept_id = concept_id_result.scalar_one()
+                id_map[c.id] = concept_id
                 
             concepts_payload = [
                 {"id": str(id_map[c.id]), "name": c.name, "description": c.description}
@@ -186,7 +206,7 @@ async def generate_plan_background(
             
             # Stage 4: Content Generation
             from app.core.platform_registry import resolve_resource_url
-            content_items = await ai_service.generate_content(concepts)
+            content_items = await ai_service.generate_content(concepts, plan.subject_domain)
             for item in content_items:
                 concept_uuid = id_map.get(item.concept_id)
                 if concept_uuid:
