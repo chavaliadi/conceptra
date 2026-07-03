@@ -1,19 +1,14 @@
 # 🌌 Conceptra: Adaptive Learning Operating System (ALOS)
 
-Conceptra is an **Adaptive Learning Operating System (ALOS)** designed to compile unstructured course syllabi into dynamic, state-tracking learning environments. It builds dependency graphs of concepts, schedules study sessions using deterministic algorithms, and tracks mastery over time using spaced repetition—dynamically adapting future study pathways based on measured performance rather than checklist completion.
+Conceptra is an **Adaptive Learning Operating System (ALOS)** designed to compile unstructured course syllabi into dynamic, state-tracking execution environments. 
 
-## 🚀 The Core Philosophy: System-Owned Intelligence
+Most "AI study apps" act as simple wrappers around LLMs, leading to high latency, hallucinated study guides, and unstable study calendars. Conceptra takes a different approach: it treats the LLM as a **stateless utility service** and runs its learning engine using **deterministic systems, graph theory, and cognitive science algorithms**.
 
-Unlike commodity "AI study planners" that act as simple LLM wrappers, Conceptra treats the LLM as a **stateless utility service** for language tasks (concept extraction, MCQ generation, explanation synthesis). The application's database acts as the **state registry**, and the learning engine is governed by **deterministic systems and graph algorithms**:
+---
 
-1. **Dependency Compiler (Knowledge Layer):** Compiles course syllabi into a Directed Acyclic Graph (DAG) representing structural prerequisite relationships.
-2. **Process Scheduler (Student State Layer):** Manages study sessions and review queues using Kahn's algorithm (topological sort), Greedy Bin-Packing (daily hour allocation), and SuperMemo-2 (SM-2 intervals).
-3. **Adaptive Feedback Loop (AI Layer):** Adapts explanations and quizzes in real-time, addressing specific student misconceptions captured from past quiz attempts.
+## 🏛️ System Philosophy: Decoupled Architecture
 
-
-## 🎯 Core Concept Design: Three-Layer Separation
-
-Conceptra's architecture separates the static syllabus structure, dynamic student state, and the AI synthesis pipeline. This guarantees that student telemetry updates remain deterministic and decoupled from LLM inference latency.
+Conceptra divides your learning process into three independent layers. This guarantees that your schedule, progress tracking, and study calendars are governed by stable backend math rather than unpredictable AI generations.
 
 ```mermaid
 graph TD
@@ -42,110 +37,95 @@ graph TD
     TutorGrounder -.->|Personalizes| Student
 ```
 
+### 1. The Knowledge Layer (The Compiler)
+When you upload a syllabus, the system compiles it into a **Directed Acyclic Graph (DAG)**. 
+- **Concepts (Nodes):** The syllabus is broken down into granular sub-topics (e.g., instead of "Computer Networks", it extracts "IP Addressing", "Subnetting", "CIDR").
+- **Dependencies (Edges):** The compiler maps what you must learn *before* you can study a harder topic (e.g., "Binary Arithmetic" $\rightarrow$ "Subnetting").
+- **Cycle Detection:** A cycle validation algorithm ensures there are no circular dependencies (e.g., A depends on B, which depends on A), which would break scheduling.
+
+### 2. The Student State Layer (The Registry & Scheduler)
+This is the database registry of your progress. It does not rely on LLMs. It tracks:
+- **Mastery Levels:** Calculated deterministically from quiz scores and reported confidence.
+- **Forgetting Curves:** The SuperMemo-2 (SM-2) Spaced Repetition algorithm computes when you will forget a concept, automatically adjusting its interval.
+- **Dynamic Scheduler:** Combines a topological sort of the knowledge graph with a greedy bin-packing algorithm to generate a custom day-by-day study program.
+
+### 3. The AI Synthesis Layer (Stateless Handlers)
+LLMs are stateless. Conceptra calls Groq API endpoints only when it needs translation tasks:
+- Parsing course syllabi into clean structural JSON.
+- Generating multiple-choice questions (MCQs) for concept checkpoints.
+- Generating explanatory guides.
+- Serving as a grounding-tutor that explains concepts during chat.
+
 ---
 
-## 🏛️ System Architecture & Observability
+## 📁 Codebase Directory Map
 
-Conceptra is built with a decoupled FastAPI backend, a responsive React frontend, and an asynchronous background worker architecture running locally. Prometheus metrics and Sentry error tracking are instrumented directly at the API layer for production-grade observability and runtime telemetry.
+Refer to these source locations to inspect the underlying implementations of each ALOS subsystem:
 
-```mermaid
-graph TD
-    User([User / Browser])
-    
-    subgraph Frontend ["React Frontend (Vite + TypeScript)"]
-        Dashboard["Dashboard & Graph View"]
-        TutorDrawer["AI Tutor Drawer & MCQ Quiz"]
-        CommunityLibrary["Community Library & Forking"]
-        SSEListener["SSE Progress Listener"]
-    end
-    
-    subgraph Backend ["FastAPI Application Server"]
-        API["API Endpoints (FastAPI)"]
-        RateLimiter["SlowAPI (Rate Limiter)"]
-        Prometheus["Prometheus /metrics"]
-        Sentry["Sentry Error Tracking"]
-        Cache["Redis Cache & Pub/Sub"]
-    end
-    
-    subgraph Queues ["Asynchronous Task Execution"]
-        RQ["Redis Queue (RQ Worker)"]
-    end
-
-    subgraph Data ["Persistence & AI Layer"]
-        DB[("PostgreSQL (Port 5435)")]
-        Groq["LLM Provider (Groq API)"]
-    end
-
-    User -->|Interacts| Dashboard
-    User -->|Chat / MCQ Quiz / Explainers| TutorDrawer
-    User -->|Browse / Fork Plans| CommunityLibrary
-    
-    Dashboard -->|POST /api/v2/plans| RateLimiter
-    RateLimiter --> API
-    TutorDrawer -->|POST /api/v2/tutor/chat| API
-    CommunityLibrary -->|POST /api/v2/plans/fork| API
-    
-    API -->|Write Job to Queue| Cache
-    API -->|Read/Write Cache| Cache
-    API -->|Read/Write Data| DB
-    API -->|Log Telemetry| DB
-    API --> Prometheus
-    API --> Sentry
-    
-    Cache -->|Job trigger| RQ
-    RQ -->|Execute 4-Stage Pipeline| RQ
-    RQ -->|Fetch completions| Groq
-    RQ -->|Persist Graph & Schedule| DB
-    RQ -->|Publish Progress Status| Cache
-    
-    Cache -->|SSE Progress Channel| SSEListener
-    SSEListener -->|Real-time Updates| Dashboard
+```
+├── backend/
+│   └── app/
+│       ├── api/
+│       │   └── routes/
+│       │       ├── plans_v2.py       <-- REST endpoints for syllabus uploading, calendar replanning, and analytics
+│       │       └── tutor_routes.py   <-- AI tutor RAG chat synthesis & Spaced Repetition MCQ grading loops
+│       ├── models/
+│       │   ├── database.py           <-- ORM Schemas (Plan, Concept, Edge, Progress, QuizAttempt, TutorChatMessage)
+│       │   └── schemas.py            <-- Pydantic validation schemas (including custom weekly availability arrays)
+│       └── services/
+│           ├── ai_service.py         <-- Groq client handler for plan compilation, QA generation, and replanning prompts
+│           ├── dag_service.py        <-- Kahn's topological sorter, BFS level grouper, and greedy bin-packing scheduler
+│           ├── scheduler.py          <-- Blended Ebbinghaus retention decay & review debt telemetry
+│           └── srs.py                <-- Core SuperMemo-2 algorithm parameters
+└── frontend/
+    └── src/
+        ├── api/
+        │   └── client.ts             <-- Typings-safe client wrapper for background sync endpoints
+        ├── components/
+        │   ├── ConceptGraph.tsx      <-- Level-based dependency visualizer rendering 5 discrete mastery statuses
+        │   └── AnalyticsDashboard.tsx <-- SVG Ebbinghaus forgetting curve line chart & review debt metric card
+        ├── pages/
+        │   ├── PlanView.tsx          <-- Study dashboard featuring interactive weekly availability scheduler
+        │   └── Landing.tsx           <-- File extraction & syllabus generation entry page
+        └── types.ts                  <-- TypeScript interfaces mirroring database schemas
 ```
 
 ---
 
-## 🔄 Core Workflows & Logic
+## 🗄️ Database Schema Design
 
-### 1. Asynchronous Multi-Stage AI Pipeline
-When a user uploads a syllabus PDF or types a study topic:
-1. **Syllabus Text Extraction:** The system extracts the raw text layer, verifying it is search-friendly (rejecting image-only scans).
-2. **Concept Extraction (Stage 1):** Syllabus documents group dozens of examinable sub-topics under generic chapter headings. Conceptra extracts them at the concept level — CRC, Hamming Distance, Go-Back-N — giving the scheduler and mastery tracker something meaningful to operate on. It extracts 4–40 granular concepts with individual titles, descriptions, and difficulty weights.
-3. **Dependency Graphing (Stage 2):** Prerequisites are built dynamically. A Cycle-Detection validator ensures the graph is a Directed Acyclic Graph (DAG) with no loops.
-4. **Bin-Packing Study Scheduler (Stage 3):** The scheduler distributes concepts over daily hours budgets using difficulty weights.
-5. **Content Synthesis (Stage 4):** Summaries, Handpicked Resources (Wiki, YouTube queries resolved server-side to prevent link rot), and MCQs are synthesized.
+The ALOS database schema is designed to enforce relational integrity. If a study plan is deleted, all child metadata cascades cleanly.
 
-```mermaid
-sequenceDiagram
-    participant U as User Browser
-    participant API as FastAPI Server
-    participant Redis as Redis Queue
-    participant W as RQ Worker
-    participant LLM as Groq LLM
-    participant DB as PostgreSQL
-
-    U->>API: Upload Syllabus PDF / Topic
-    API->>DB: Initialize Plan (Status: generating)
-    API->>Redis: Enqueue Plan Generation Job
-    API-->>U: SSE Connection Established (Listen to Plan UUID)
-    
-    W->>Redis: Pick Up Job
-    W->>LLM: Step 1: Extract Granular Concepts (4-40 items)
-    LLM-->>W: Concept List (easy/medium/hard)
-    W->>LLM: Step 2: Determine Prerequisites
-    LLM-->>W: Prerequisite Edges List
-    W->>W: Perform Cycle Detection & Topological Sort
-    W->>W: Step 3: Run Greedy Bin-Packing Study Scheduler
-    W->>LLM: Step 4: Synthesize Study Guide Content & Quizzes
-    LLM-->>W: Concept explanations & 3x MCQs per concept
-    W->>DB: Save Concepts, Edges, Schedule, & Content
-    W->>Redis: Publish progress: "completed"
-    Redis-->>U: SSE message: "completed" (Redirects dashboard)
 ```
+                  ┌───────────────────────┐
+                  │         Plan          │
+                  └───────────┬───────────┘
+                              │ 1
+                              ├───────────────────────┐
+                            * │                     * │
+                  ┌───────────▼───────────┐ ┌─────────▼─────────┐
+                  │        Concept        │ │       Edge        │
+                  └───────────┬───────────┘ └───────────────────┘
+                              │ 1
+          ┌───────────────────┼───────────────────┐
+        1 │                 * │                 * │
+┌─────────▼─────────┐ ┌───────▼───────┐ ┌─────────▼─────────┐
+│     Progress      │ │  QuizAttempt  │ │ TutorChatMessage  │
+└───────────────────┘ └───────────────┘ └───────────────────┘
+```
+
+- **Plan:** Stores master study parameters (`hours_per_day`, `exam_date`, `topic`, and `calendar_timetable` JSONB weekly study limits).
+- **Concept:** Individual study items containing names, cognitive descriptions, and difficulty weights (`easy`, `medium`, `hard`).
+- **Edge:** Directed dependency vectors storing `from_concept_id` (prerequisite) and `to_concept_id` (target).
+- **Progress:** Spacing registry storing `repetitions`, `ease_factor`, `interval_days`, `mastery_pct`, `last_reviewed_at`, and `next_review_at`.
+- **QuizAttempt:** Student history containing `question_text`, `is_correct`, and `confidence_reported`.
+- **TutorChatMessage:** Context message thread containing chat history for conversational RAG queries.
 
 ---
 
-### 2. Spaced Repetition (SM-2) Grading & Mastery Loop
-Conceptra tracks learning progress natively through objective quizzes.
+## 📈 Spaced Repetition & Forgetting Curves (Simply Explained)
+
+To ensure you retain what you study, Conceptra implements a cognitive decay model based on the **Ebbinghaus Forgetting Curve** and the **SuperMemo-2 (SM-2) Spaced Repetition** algorithm.
 
 ```mermaid
 flowchart TD
@@ -171,76 +151,84 @@ flowchart TD
     Persist --> End([Mastery scores & schedule updated])
 ```
 
-#### SM-2 Mathematical Blend
-Backend grading compares selected indices directly:
-* **Correct + high confidence (1.00)** $\rightarrow$ Blends to Quality Score **5**.
-* **Correct + low confidence (0.25 / 0.50)** $\rightarrow$ Blends to Quality Score **3**.
-* **Incorrect + low confidence (0.25 / 0.50)** $\rightarrow$ Blends to Quality Score **2**.
-* **Incorrect + high confidence (1.00)** $\rightarrow$ Blends to Quality Score **1** *(confident incorrect, heavily penalized to trigger immediate review)*.
+### The MCQ Confidence Grading Matrix
+When you answer a quiz, you report your confidence: **Guessing**, **Somewhat Confident**, or **Highly Confident**. The system maps this to an SM-2 Quality Score (0 to 5):
 
-Mastery updates are bounded:
-$$\text{new\_mastery} = \max(0.0, \min(100.0, \text{current\_mastery} + \Delta))$$
-The next review date is scheduled as:
-$$\text{next\_review\_at} = \text{now} + \Delta\text{interval\_days}$$
+1. **Correct + Highly Confident $\rightarrow$ Quality 5:** You fully grasp the concept.
+2. **Correct + Low/Somewhat Confident $\rightarrow$ Quality 3:** Correct answer, but spacing intervals will expand slowly to ensure reinforcement.
+3. **Incorrect + Low/Guessing Confidence $\rightarrow$ Quality 2:** You didn't know, but you knew you didn't know. Spacing intervals reset.
+4. **Incorrect + Highly Confident $\rightarrow$ Quality 1 (Critical):** You had **false confidence** (a deep misconception). The system heavily penalizes your ease factor and schedules an immediate review.
 
----
+### How Spaced Repetition Math Works
+The Quality Score ($q$) modifies the concept's **Ease Factor ($EF$)** and **Repetitions count ($R$)**:
 
-### 3. Study Calendar Bin-Packing Logic
-Instead of placing topics sequentially on subsequent calendar slots, Conceptra packs them greedily:
-* **Prerequisites First:** We perform a topological sort of the graph to ensure prerequisites always precede dependent topics.
-* **Difficulty Cost Assignment:** Each topic has a time cost based on its cognitive difficulty:
-  * `easy` $\rightarrow$ 30 minutes
-  * `medium` $\rightarrow$ 60 minutes
-  * `hard` $\rightarrow$ 90 minutes
-* **Daily Budget Constraints:** Daily slots are limited by the user's `hours_per_day` budget.
-* **Greedy Allocation:** The scheduler loops over the sorted concepts list, packing them sequentially into Day 1, Day 2, etc. If a concept's cost exceeds the remaining day budget, it rolls over to the next day's budget.
-* **Spaced Repetition Review Queues:** Concepts due for review are loaded from the `Progress` table, sorted topologically, and prioritized by lowest mastery percentage using Kahn's algorithm.
+- **Ease Factor adjustment:**
+  $$EF_{\text{new}} = EF_{\text{old}} + (0.1 - (5 - q) \times (0.08 + (5 - q) \times 0.02))$$
+  We clamp $EF$ to a minimum of $1.3$.
+- **Interval calculation ($I$ in days):**
+  - If $R = 1 \rightarrow I = 1$ day
+  - If $R = 2 \rightarrow I = 6$ days
+  - If $R > 2 \rightarrow I_{\text{new}} = I_{\text{old}} \times EF_{\text{new}}$
 
----
-
-### 4. AI Tutor Misconception Grounding
-When the user chats with the AI Tutor for a specific concept:
-1. The backend runs a query over `QuizAttempt` to fetch the top 3 confident-incorrect attempts for that concept.
-2. The tutor prompt is customized with:
-   * Current student mastery scores (mastery, confidence level, attempts count).
-   * Specific misconceptions: *"The user chose option A (incorrect) instead of option B (correct) for question X."*
-3. The AI Tutor adapts its response style to address the specific misconception and student capability level directly.
+### Decay-Aware Retention & Review Debt
+Every concept's retention decays exponentially over time since it was last reviewed:
+$$\text{Retention} = 100 \times \left(0.9\right)^{\frac{\Delta \text{days}}{I}}$$
+- **Review Debt:** Any concept where the current retention index drops below critical thresholds or the next review date has passed is marked as "Overdue", generating **Review Debt** that must be resolved before introducing new topics.
 
 ---
 
-## ⚖️ Key Design Decisions
+## 🧮 Scheduling Algorithms (Simply Explained)
 
-During implementation, the following architectural trade-offs were made:
+Conceptra uses deterministic scheduling to turn your knowledge graph into a study calendar.
 
-| Decision Area | Chosen Approach | Rationale & Alternatives Considered |
-| :--- | :--- | :--- |
-| **Study Scheduling** | **SM-2 (SuperMemo-2) SRS Algorithm** | **Alternative:** Custom linear heuristic math.<br>**Rationale:** SM-2 is a mathematically proven intervals progression algorithm. It yields a smooth retention curve and scales intervals predictably, preventing review overload. |
-| **Quiz Grading** | **MCQ + Self-Reported Confidence Selector** | **Alternative:** LLM-graded open-ended text answers.<br>**Rationale:** Semantically grading free text with an LLM introduces grading variance (nondeterministic scores), increases token costs, and introduces high API latency. Pure MCQ index validation runs in sub-millisecond cycles with deterministic precision. |
-| **Study Resources** | **Structured Platform + Search Query Registry** | **Alternative:** Direct URL generation by LLM.<br>**Rationale:** LLMs frequently hallucinate URLs, causing dead links. The registry maps resolved platform templates (Wikipedia, Neso Academy) to dynamic search terms, guaranteeing zero broken links. |
-| **State Management** | **Progress Table Single-Source-of-Truth** | **Alternative:** Double-table tracking (LearningProfile + Progress).<br>**Rationale:** Storing state across two tables with divergent math causes split-brain progress sync. Unifying tracking directly in the `Progress` table ensures consistency. |
+### 1. Topological Sorting (Kahn's Algorithm)
+To prevent a student from studying advanced concepts before mastering prerequisites, Conceptra performs a topological sort on the dependency DAG.
 
----
+- We start by identifying nodes with **zero in-degree** (no prerequisites).
+- We place these nodes first in the queue.
+- We then remove these nodes from the graph and decrease the in-degree of all their child nodes.
+- We repeat this process until all concepts are sorted.
+If the graph contains cycles, Kahn's algorithm fails, triggering validation errors immediately during upload.
 
-## 🔑 Required API Keys & Environment Variables
+### 2. Greedy Bin-Packing with Availability Timetables
+Syllabus topics have varying difficulty ratings. Conceptra assigns a time cost to each:
+- **Easy:** 30 minutes
+- **Medium:** 60 minutes
+- **Hard:** 90 minutes
 
-Conceptra depends on a few configuration keys:
-
-| Environment Variable | Where it goes | Purpose | Value Example |
-| :--- | :--- | :--- | :--- |
-| `DATABASE_URL` | Backend `.env` | Async Connection string for PostgreSQL database | `postgresql+asyncpg://postgres:postgres@localhost:5435/conceptra` |
-| `REDIS_URL` | Backend `.env` | Redis connection URL for background jobs / SSE | `redis://localhost:6379` |
-| `GROQ_API_KEY` | Backend `.env` | Access token for llama-3.1-70b-versatile pipelines | `gsk_XYZ123...` |
-| `CLERK_SECRET_KEY` | Backend `.env` | Clerk secret API key to validate JWT auth headers | `sk_test_XYZ...` |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Backend `.env` | Clerk publishable public identifier | `pk_test_XYZ...` |
-| `SENTRY_DSN` | Backend `.env` | (Optional) Error monitoring tracking endpoint | `https://sentry_endpoint...` |
-| `VITE_API_VERSION` | Frontend `.env.local` | API version router prefix | `v2` |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend `.env.local` | Clerk publishable key for client sign-in checks | `pk_test_XYZ...` |
+To schedule study sessions:
+1. The user inputs their available weekly timetable (e.g., Monday = 2 hrs, Saturday = 4 hrs, Sunday = 0 hrs).
+2. The scheduler loops through the topologically sorted concepts.
+3. It packs them into available calendar slots sequentially.
+4. If a concept's time cost exceeds the remaining availability budget for that day, it is packed into the next day with positive availability.
+5. Days with $0$ hours availability (rest days) are skipped entirely, letting you schedule around work or weekends.
 
 ---
 
-## 🛠️ Step-by-Step Setup Guide
+## 🤖 RAG-Grounded AI Tutoring (Simply Explained)
 
-Follow these instructions to clone and run the entire stack locally.
+Ordinary AI tutors have no memory of your learning behavior. Conceptra integrates your database state into the LLM context (Retrieval-Augmented Generation) to guide the tutor:
+
+1. **State Injection:** The backend checks the mastery score, ease factor, and elapsed review interval of the active concept.
+2. **Graph Context Injection:** The tutor retrieves the mastery status of the concept's prerequisites. If you are struggling with "Subnet Masks" and try to learn "Routing Tables", the tutor is grounded in this blocker.
+3. **Misconception Injection:** The system fetches your last 3 **confident-incorrect** quiz responses (where you selected the wrong answer with high confidence). The prompt includes: *"The student answered question X incorrectly, choosing option Y (incorrect) instead of option Z (correct). Direct your response to resolve this specific misunderstanding."*
+
+This grounds the tutor in your personal memory profile, yielding highly contextual answers.
+
+---
+
+## 💻 Technical Stack & Local Infrastructure
+
+- **Backend:** FastAPI application server with SlowAPI rate limiting, SQLAlchemy, and Alembic migrations.
+- **Frontend:** React, Vite, TailwindCSS, and TypeScript.
+- **Database:** PostgreSQL (Port 5435).
+- **Cache & Pub/Sub:** Redis (Port 6379) for caching database plans and broadcasting progress updates.
+- **Background Worker:** Redis Queue (RQ) worker running async syllabus extraction, DAG cycle checking, and content generation.
+- **LLM Pipeline:** Groq API using `llama-3.1-70b-versatile` for language modeling.
+
+---
+
+## 🛠️ Step-by-Step Installation & Setup
 
 ### Prerequisites
 * **Python:** version 3.10+
@@ -251,15 +239,14 @@ Follow these instructions to clone and run the entire stack locally.
 ---
 
 ### 1. Database Setup
-Create a PostgreSQL database named `conceptra`.
+Create a PostgreSQL database named `conceptra`:
 ```sql
 CREATE DATABASE conceptra;
 ```
 
 ---
 
-### 2. Backend Installation & Setup
-
+### 2. Backend Setup
 1. Navigate to the `backend/` directory:
    ```bash
    cd backend
@@ -274,7 +261,7 @@ CREATE DATABASE conceptra;
    ```bash
    pip install -r requirements.txt
    ```
-4. Create a `.env` file in the `backend/` folder and populate it with your API keys:
+4. Create a `.env` file in the `backend/` folder:
    ```env
    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5435/conceptra
    REDIS_URL=redis://localhost:6379
@@ -290,31 +277,24 @@ CREATE DATABASE conceptra;
    ```bash
    uvicorn app.main:app --reload --port 8000
    ```
-   * The API runs at `http://127.0.0.1:8000`
-   * Swagger docs are at `http://127.0.0.1:8000/docs`
+   * Swagger docs will be accessible at `http://127.0.0.1:8000/docs`
 
 ---
 
-### 3. Asynchronous Worker Setup
-
-For background generation, you need to run the RQ worker.
-
-1. Open a new terminal window/tab.
-2. Navigate to the `backend/` directory and activate the virtual environment:
+### 3. Background Worker Setup
+1. Open a new terminal tab/window, navigate to the `backend/` folder, and activate the virtual environment:
    ```bash
    cd backend
    source .venv/bin/activate
    ```
-3. Run the worker script:
+2. Start the Redis Queue background worker:
    ```bash
    python -m app.worker
    ```
-   * The worker listens to the `default` Redis queue and executes the multi-stage generation.
 
 ---
 
-### 4. Frontend Installation & Setup
-
+### 4. Frontend Setup
 1. Navigate to the `frontend/` directory:
    ```bash
    cd frontend
@@ -328,9 +308,9 @@ For background generation, you need to run the RQ worker.
    VITE_API_VERSION=v2
    VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
    ```
-4. Start the frontend Vite development server:
+4. Start the Vite development server:
    ```bash
    npm run dev
    ```
-   * The frontend runs at `http://localhost:5173`
-   * Benchmark telemetry values can be viewed at `http://localhost:5173/benchmarks`
+   * The frontend runs locally at `http://localhost:5173`
+   * Open the app in your browser to start compiling your learning plans!
