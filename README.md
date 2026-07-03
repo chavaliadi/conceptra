@@ -1,10 +1,15 @@
-# 🌌 Conceptra: Database-Driven Adaptive Learning Engine
+# 🌌 Conceptra: Adaptive Learning Operating System (ALOS)
 
-Conceptra is a database-driven adaptive learning engine that converts a course syllabus PDF into a dependency graph of concepts, schedules study sessions using a greedy bin-packing algorithm, and tracks mastery over time using SM-2 spaced repetition — adapting the revision schedule based on quiz performance rather than completion.
+Conceptra is an **Adaptive Learning Operating System (ALOS)** designed to compile unstructured course syllabi into dynamic, state-tracking learning environments. It builds dependency graphs of concepts, schedules study sessions using deterministic algorithms, and tracks mastery over time using spaced repetition—dynamically adapting future study pathways based on measured performance rather than checklist completion.
 
-The LLM in Conceptra is simply one component of a larger system, not the product itself. The LLM handles language tasks (concept extraction, explanation generation, MCQ writing). The application owns everything else: the dependency graph, the student mastery model, the scheduling algorithm, and the adaptive revision logic. This separation means the system's intelligence comes from the data it accumulates about a student over time, not from re-prompting an LLM every session.
+## 🚀 The Core Philosophy: System-Owned Intelligence
 
----
+Unlike commodity "AI study planners" that act as simple LLM wrappers, Conceptra treats the LLM as a **stateless utility service** for language tasks (concept extraction, MCQ generation, explanation synthesis). The application's database acts as the **state registry**, and the learning engine is governed by **deterministic systems and graph algorithms**:
+
+1. **Dependency Compiler (Knowledge Layer):** Compiles course syllabi into a Directed Acyclic Graph (DAG) representing structural prerequisite relationships.
+2. **Process Scheduler (Student State Layer):** Manages study sessions and review queues using Kahn's algorithm (topological sort), Greedy Bin-Packing (daily hour allocation), and SuperMemo-2 (SM-2 intervals).
+3. **Adaptive Feedback Loop (AI Layer):** Adapts explanations and quizzes in real-time, addressing specific student misconceptions captured from past quiz attempts.
+
 
 ## 🎯 Core Concept Design: Three-Layer Separation
 

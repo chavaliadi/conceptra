@@ -48,10 +48,11 @@ class Plan(Base):
         ForeignKey("plans.id", ondelete="SET NULL"),
         nullable=True,
     )
-    # Layer 1 additions
     subject_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source_books: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calendar_timetable: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

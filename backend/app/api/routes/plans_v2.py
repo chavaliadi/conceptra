@@ -24,7 +24,8 @@ from app.models.schemas import (
     Resource,
     ScheduleItem as SchemaScheduleItem,
     DueReviewItem,
-    AnalyticsResponse
+    AnalyticsResponse,
+    ConceptProgressDetail
 )
 from app.models.database import Concept, Edge, ConceptContent, Progress, Schedule, ScheduleHistory
 
@@ -182,7 +183,11 @@ async def generate_plan_background(
                 {"id": cid, "difficulty": concept_map[cid].difficulty}
                 for cid in sorted_ids if cid in concept_map
             ]
-            schedule_items = generate_schedule(sorted_concepts, hours_per_day=hours_per_day)
+            schedule_items = generate_schedule(
+                sorted_concepts, 
+                hours_per_day=hours_per_day,
+                calendar_timetable=plan.calendar_timetable
+            )
             
             # Save schedule to DB
             for s in schedule_items:
@@ -343,7 +348,8 @@ async def _create_plan_logic(
             exam_date=payload.exam_date,
             hours_per_day=payload.hours_per_day,
             status="completed",
-            clerk_user_id=clerk_user_id
+            clerk_user_id=clerk_user_id,
+            calendar_timetable=payload.calendar_timetable
         )
         
         # Maps fixture string ID to DB UUID
@@ -410,7 +416,8 @@ async def _create_plan_logic(
                 exam_date=payload.exam_date,
                 hours_per_day=payload.hours_per_day,
                 status="completed",
-                clerk_user_id=clerk_user_id
+                clerk_user_id=clerk_user_id,
+                calendar_timetable=payload.calendar_timetable
             )
             
             # Map cached temp ID to DB UUID
@@ -466,7 +473,8 @@ async def _create_plan_logic(
             hours_per_day=payload.hours_per_day,
             status="generating",
             clerk_user_id=clerk_user_id,
-            raw_text=syllabus_text
+            raw_text=syllabus_text,
+            calendar_timetable=payload.calendar_timetable
         )
         await db.commit()
         from app.worker import queue
@@ -526,7 +534,11 @@ async def get_plan_endpoint(
                 {"id": cid, "difficulty": concept_map[cid].difficulty}
                 for cid in sorted_ids if cid in concept_map
             ]
-            schedule_items = generate_schedule(sorted_concepts, hours_per_day=plan.hours_per_day)
+            schedule_items = generate_schedule(
+                sorted_concepts, 
+                hours_per_day=plan.hours_per_day,
+                calendar_timetable=plan.calendar_timetable
+            )
         except ValueError:
             # Fallback if cycle somehow exists
             concept_map = {str(c.id): c for c in plan.concepts}
@@ -534,7 +546,11 @@ async def get_plan_endpoint(
                 {"id": str(c.id), "difficulty": c.difficulty}
                 for c in plan.concepts
             ]
-            schedule_items = generate_schedule(sorted_concepts, hours_per_day=plan.hours_per_day)
+            schedule_items = generate_schedule(
+                sorted_concepts, 
+                hours_per_day=plan.hours_per_day,
+                calendar_timetable=plan.calendar_timetable
+            )
     else:
         schedule_items = []
         
@@ -575,7 +591,8 @@ async def get_plan_endpoint(
         schedule=schedule_items,
         content=content_dict,
         created_at=plan.created_at,
-        status=plan.status
+        status=plan.status,
+        calendar_timetable=plan.calendar_timetable
     )
 
 @router.get("", response_model=list[PlanResponse])
@@ -668,6 +685,126 @@ async def update_progress_endpoint(
     await ProgressRepository.update_status(db, plan_id, concept_id, status_val)
     return {"status": status_val}
 
+@router.patch("/{plan_id}", response_model=PlanResponse)
+async def update_plan_endpoint(
+    plan_id: UUID,
+    payload: dict,
+    current_user: dict | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> PlanResponse:
+    plan = await PlanRepository.get_by_id(db, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+        
+    if plan.clerk_user_id is not None:
+        if not current_user or plan.clerk_user_id != current_user["sub"]:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this plan")
+            
+    if "calendar_timetable" in payload:
+        plan.calendar_timetable = payload["calendar_timetable"]
+    if "hours_per_day" in payload:
+        plan.hours_per_day = payload["hours_per_day"]
+    if "exam_date" in payload:
+        if payload["exam_date"]:
+            try:
+                plan.exam_date = datetime.strptime(payload["exam_date"], "%Y-%m-%d")
+            except ValueError:
+                # support ISO timestamp string as well
+                plan.exam_date = datetime.fromisoformat(payload["exam_date"].replace('Z', '+00:00'))
+        else:
+            plan.exam_date = None
+            
+    await db.commit()
+    
+    concepts_list = [
+        SchemaConcept(id=str(c.id), name=c.name, description=c.description or "")
+        for c in plan.concepts
+    ]
+    edges_list = [
+        SchemaEdge(from_id=str(e.from_concept_id), to_id=str(e.to_concept_id))
+        for e in plan.edges
+    ]
+    
+    schedule_items = []
+    if plan.schedule:
+        schedule_items = [
+            SchemaScheduleItem(
+                concept_id=str(s.concept_id),
+                week=s.week,
+                day=s.day,
+                priority=s.priority
+            )
+            for s in plan.schedule
+        ]
+    elif concepts_list:
+        try:
+            sorted_ids = validate_and_sort_dag(
+                [{"id": c.id} for c in concepts_list],
+                [{"from_id": e.from_id, "to_id": e.to_id} for e in edges_list]
+            )
+            concept_map = {str(c.id): c for c in plan.concepts}
+            sorted_concepts = [
+                {"id": cid, "difficulty": concept_map[cid].difficulty}
+                for cid in sorted_ids if cid in concept_map
+            ]
+            schedule_items = generate_schedule(
+                sorted_concepts,
+                hours_per_day=plan.hours_per_day,
+                calendar_timetable=plan.calendar_timetable
+            )
+        except ValueError:
+            concept_map = {str(c.id): c for c in plan.concepts}
+            sorted_concepts = [
+                {"id": str(c.id), "difficulty": c.difficulty}
+                for c in plan.concepts
+            ]
+            schedule_items = generate_schedule(
+                sorted_concepts,
+                hours_per_day=plan.hours_per_day,
+                calendar_timetable=plan.calendar_timetable
+            )
+            
+    content_dict = {}
+    for c in plan.concepts:
+        if c.content:
+            content_dict[str(c.id)] = SchemaConceptContent(
+                concept_id=str(c.id),
+                explanation=c.content.explanation,
+                quiz=[
+                    QuizQuestion(
+                        type=q["type"],
+                        question=q["question"],
+                        options=q.get("options", []),
+                        correct_option_index=q.get("correct_option_index", 0)
+                    )
+                    for q in c.content.quiz
+                ],
+                resources=[
+                    Resource(
+                        type=r["type"],
+                        title=r["title"],
+                        url=r["url"],
+                        platform=r.get("platform"),
+                        query=r.get("query")
+                    )
+                    for r in c.content.resources
+                ],
+            )
+            
+    return PlanResponse(
+        id=plan.id,
+        topic=plan.topic,
+        exam_date=plan.exam_date.date() if plan.exam_date else None,
+        hours_per_day=plan.hours_per_day,
+        graph=Graph(concepts=concepts_list, edges=edges_list),
+        schedule=schedule_items,
+        content=content_dict,
+        created_at=plan.created_at,
+        status=plan.status,
+        calendar_timetable=plan.calendar_timetable
+    )
+
+
 @router.post("/{plan_id}/replan", response_model=list[SchemaScheduleItem])
 async def replan_schedule_endpoint(
     plan_id: UUID,
@@ -724,7 +861,8 @@ async def replan_schedule_endpoint(
             edges=edges_input,
             current_schedule=current_schedule_input,
             struggling_ids=struggling_ids,
-            remaining_days=remaining_days
+            remaining_days=remaining_days,
+            calendar_timetable=plan.calendar_timetable
         )
         
         # Save ScheduleHistory
@@ -775,14 +913,29 @@ async def replan_schedule_endpoint(
         logger.error(f"Failed to replan schedule: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to replan schedule: {str(e)}")
 
-@router.get("/{plan_id}/progress", response_model=dict[str, str])
+@router.get("/{plan_id}/progress", response_model=dict[str, ConceptProgressDetail])
 async def get_all_progress_endpoint(
     plan_id: UUID,
     db: AsyncSession = Depends(get_db)
-) -> dict[str, str]:
-    prog_map = await ProgressRepository.get_progress(db, plan_id)
-    # convert UUID keys to string representation
-    return {str(k): v for k, v in prog_map.items()}
+) -> dict[str, ConceptProgressDetail]:
+    result = await db.execute(
+        select(Progress).where(Progress.plan_id == plan_id)
+    )
+    progress_items = result.scalars().all()
+    
+    from app.services.scheduler import calculate_decayed_retention
+    
+    details = {}
+    for item in progress_items:
+        retention = calculate_decayed_retention(item.last_reviewed_at, item.interval_days, item.mastery_pct)
+        details[str(item.concept_id)] = ConceptProgressDetail(
+            status=item.status,
+            mastery_pct=item.mastery_pct,
+            retention_pct=retention,
+            next_review_at=item.next_review_at
+        )
+    return details
+
 
 @router.get("/{plan_id}/reviews/due", response_model=list[DueReviewItem])
 async def get_due_reviews_endpoint(
@@ -961,7 +1114,7 @@ async def get_plan_analytics_endpoint(
     # Get progress counts
     progress_map = await ProgressRepository.get_progress(db, plan_id)
     
-    from datetime import date as d_date
+    from datetime import date as d_date, timezone
     learned_count = sum(1 for v in progress_map.values() if v == "learned")
     struggling_count = sum(1 for v in progress_map.values() if v == "struggling")
     skipped_count = sum(1 for v in progress_map.values() if v == "skipped")
@@ -1003,6 +1156,55 @@ async def get_plan_analytics_endpoint(
             status_assessment = "Behind"
         else:
             status_assessment = "Critical"
+
+    # ─── RICH TELEMETRY LOGIC ────────────────────────────────────────────────
+    now_tz = datetime.now(timezone.utc)
+    review_debt = 0
+    total_mastery = 0.0
+    total_retention = 0.0
+    active_progress_count = 0
+    
+    from app.services.scheduler import calculate_decayed_retention
+    
+    for pr in plan.progress:
+        if pr.status in ["learned", "struggling"]:
+            retention = calculate_decayed_retention(pr.last_reviewed_at, pr.interval_days, pr.mastery_pct)
+            total_retention += retention
+            total_mastery += pr.mastery_pct
+            active_progress_count += 1
+            
+            # Check if review is overdue
+            if pr.next_review_at:
+                next_rev = pr.next_review_at.replace(tzinfo=timezone.utc) if pr.next_review_at.tzinfo is None else pr.next_review_at
+                if next_rev <= now_tz:
+                    review_debt += 1
+                    
+    average_mastery = round(total_mastery / active_progress_count, 1) if active_progress_count > 0 else 0.0
+    average_retention = round(total_retention / active_progress_count, 1) if active_progress_count > 0 else 0.0
+    
+    # Calculate Ebbinghaus memory forgetting decay curve for the next 14 days
+    retention_decay_curve = []
+    for day_offset in range(15):
+        day_ret_sum = 0.0
+        for pr in plan.progress:
+            if pr.status in ["learned", "struggling"]:
+                last_rev = pr.last_reviewed_at or datetime.now(timezone.utc)
+                if last_rev.tzinfo is None:
+                    last_rev = last_rev.replace(tzinfo=timezone.utc)
+                
+                days_elapsed = (now_tz - last_rev).total_seconds() / 86400.0 + day_offset
+                days_elapsed = max(0.0, days_elapsed)
+                
+                interval = pr.interval_days if pr.interval_days > 0 else 1
+                retention = 100.0 * (0.9 ** (days_elapsed / interval))
+                retention = max(0.0, min(retention, pr.mastery_pct))
+                day_ret_sum += retention
+        
+        avg_ret_day = day_ret_sum / active_progress_count if active_progress_count > 0 else 0.0
+        retention_decay_curve.append({
+            "day": day_offset,
+            "retention": round(avg_ret_day, 1)
+        })
             
     return AnalyticsResponse(
         total_concepts=total_concepts,
@@ -1014,7 +1216,11 @@ async def get_plan_analytics_endpoint(
         days_left=days_left,
         daily_velocity_needed=daily_velocity_needed,
         projected_completion_date=projected_date,
-        status_assessment=status_assessment
+        status_assessment=status_assessment,
+        review_debt=review_debt,
+        average_mastery=average_mastery,
+        average_retention=average_retention,
+        retention_decay_curve=retention_decay_curve
     )
 
 @router.get("/{plan_id}/concepts/{concept_id}/content", response_model=SchemaConceptContent)

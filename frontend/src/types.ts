@@ -87,6 +87,14 @@ export interface CreatePlanResponse {
 
 export type ConceptStatus = 'untouched' | 'learned' | 'struggling' | 'skipped'
 
+export interface ConceptProgressDetail {
+  status: ConceptStatus
+  mastery_pct: number
+  retention_pct: number
+  next_review_at: string | null
+}
+
+
 export interface DueReviewItem {
   id: string
   name: string
@@ -109,7 +117,12 @@ export interface AnalyticsData {
   daily_velocity_needed: number
   projected_completion_date: string
   status_assessment: 'On Track' | 'Behind' | 'Critical'
+  review_debt: number
+  average_mastery: number
+  average_retention: number
+  retention_decay_curve: { day: number; retention: number }[]
 }
+
 
 export interface TutorChatMessage {
   id: string

@@ -259,9 +259,10 @@ async def replan_schedule(
     edges: List[Dict[str, Any]],         # List of {"from_id": str, "to_id": str}
     current_schedule: List[Dict[str, Any]], # List of {"concept_id": str, "week": int, "day": int, "priority": str}
     struggling_ids: List[str],            # List of concept string IDs
-    remaining_days: int
+    remaining_days: int,
+    calendar_timetable: List[Dict[str, Any]] | None = None
 ) -> List[AIReplanScheduleItem]:
-    """Call Groq to redistribute study schedule based on struggling concepts."""
+    """Call Groq to redistribute study schedule based on struggling concepts and custom timetable."""
     # Build the descendants using networkx
     G = nx.DiGraph()
     for c in concepts:
@@ -285,6 +286,14 @@ async def replan_schedule(
     for s in current_schedule:
         current_sched_info.append(f"- Concept ID: {s['concept_id']}, Week: {s['week']}, Day: {s['day']}, Priority: {s['priority']}")
         
+    if calendar_timetable:
+        timetable_str = ", ".join([f"Day {item['day']}: {item['hours']} hours" for item in calendar_timetable])
+        timetable_instruction = f"Respect this weekly timetable of study hours: {timetable_str}. Do NOT assign concepts to days with 0 hours. Days are numbered 1 to 7 corresponding to Monday-Sunday."
+        day_limit = "integer from 1 to 7"
+    else:
+        timetable_instruction = "Provide week and day assignments assuming 5 study days per week (Days 1 to 5)."
+        day_limit = "integer from 1 to 5"
+
     system_prompt = "You are a graph theory and study scheduling routing expert. You output valid JSON."
     prompt = f"""
     We need to adaptively replan a study schedule for the topic "{topic}".
@@ -294,7 +303,7 @@ async def replan_schedule(
     1. Struggling concepts (marked as "struggling") and their downstream dependents (marked as "dependent") should be delayed or prioritized higher.
     2. Concepts that are normal or already learned should be compressed/accelerated.
     3. The schedule MUST respect prerequisite order (edges): a concept cannot be studied before its prerequisites are complete.
-    4. Provide week and day assignments assuming 5 study days per week (Days 1 to 5).
+    4. {timetable_instruction}
     5. Output the entire schedule (all concept IDs) in a single valid JSON list.
     
     Concepts metadata:
@@ -309,7 +318,7 @@ async def replan_schedule(
     You MUST return a JSON object with a single key "schedule" containing a list of objects, each with:
     - "concept_id": the ID of the concept (matching input list)
     - "week": the week number (integer starting from 1)
-    - "day": the day number (integer from 1 to 5)
+    - "day": the day number ({day_limit})
     - "priority": the priority string ("high", "medium", "low")
     
     Output the JSON now:
@@ -326,3 +335,4 @@ async def replan_schedule(
             if attempt == 5:
                 raise RuntimeError(f"Failed to generate replanned schedule after 5 attempts: {e}")
             await _handle_retry_sleep(attempt, e)
+

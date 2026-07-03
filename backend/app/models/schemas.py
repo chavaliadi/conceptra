@@ -54,6 +54,7 @@ class CreatePlanRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     exam_date: date | None = Field(None)
     hours_per_day: int = Field(ge=1, le=8, default=2)
+    calendar_timetable: list[dict] | None = None
 
 
 class CreatePlanResponse(BaseModel):
@@ -63,13 +64,15 @@ class CreatePlanResponse(BaseModel):
 class PlanResponse(BaseModel):
     id: UUID
     topic: str
-    exam_date: date
+    exam_date: date | None
     hours_per_day: int
     graph: Graph
     schedule: list[ScheduleItem]
     content: dict[str, ConceptContent]
     created_at: datetime
     status: str = "active"
+    calendar_timetable: list[dict] | None = None
+
 
 
 class DueReviewItem(BaseModel):
@@ -94,6 +97,11 @@ class AnalyticsResponse(BaseModel):
     daily_velocity_needed: float
     projected_completion_date: date
     status_assessment: Literal["On Track", "Behind", "Critical"]
+    review_debt: int = 0
+    average_mastery: float = 0.0
+    average_retention: float = 0.0
+    retention_decay_curve: list[dict] = []
+
 
 
 # ── Phase 4: Knowledge Sharing ──────────────────────────────────────────────
@@ -166,6 +174,14 @@ class LearningProfileResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ConceptProgressDetail(BaseModel):
+    status: str
+    mastery_pct: float
+    retention_pct: float
+    next_review_at: datetime | None = None
+
 
 
 

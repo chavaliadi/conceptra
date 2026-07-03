@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
-import { getPlan, getProgress, updateProgress, claimPlan, replanSchedule, getEdgeExplanation } from '../api/client'
+import { getPlan, getProgress, updateProgress, claimPlan, replanSchedule, getEdgeExplanation, updatePlan } from '../api/client'
 import ConceptPanel from '../components/ConceptPanel'
 import ConceptGraph from '../components/ConceptGraph'
 import PlanHeader from '../components/PlanHeader'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
-import type { Concept, ConceptStatus, Plan } from '../types'
+import type { Concept, ConceptStatus, Plan, ConceptProgressDetail } from '../types'
+
 
 
 
@@ -61,6 +62,12 @@ export default function PlanView() {
   const [error, setError] = useState<string | null>(null)
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null)
   const [statuses, setStatuses] = useState<Record<string, ConceptStatus>>({})
+  const [progressDetails, setProgressDetails] = useState<Record<string, ConceptProgressDetail>>({})
+  const [showTimetableEditor, setShowTimetableEditor] = useState(false)
+  const [tempTimetable, setTempTimetable] = useState<any[]>([])
+  const [savingTimetable, setSavingTimetable] = useState(false)
+
+
 
   // Custom interactive layout modes
   const [viewMode, setViewMode] = useState<'map' | 'calendar'>('map')
@@ -191,15 +198,20 @@ export default function PlanView() {
               status: 'completed'
             } : null)
             eventSource?.close()
-            // Fetch DB progress statuses
             getProgress(id, token).then((dbStatuses) => {
               if (!cancelled) {
+                setProgressDetails(dbStatuses)
+                const mappedStatuses: Record<string, ConceptStatus> = {}
+                Object.entries(dbStatuses).forEach(([cid, detail]) => {
+                  mappedStatuses[cid] = detail.status
+                })
                 setStatuses({
                   ...loadStatuses(id),
-                  ...(dbStatuses as Record<string, ConceptStatus>)
+                  ...mappedStatuses
                 })
               }
             }).catch(err => console.error('Failed to load progress from DB:', err))
+
           })
 
           eventSource.addEventListener('failed', (event: any) => {
@@ -216,9 +228,14 @@ export default function PlanView() {
           try {
             const dbStatuses = await getProgress(id, token)
             if (cancelled) return
+            setProgressDetails(dbStatuses)
+            const mappedStatuses: Record<string, ConceptStatus> = {}
+            Object.entries(dbStatuses).forEach(([cid, detail]) => {
+              mappedStatuses[cid] = detail.status
+            })
             setStatuses({
               ...loadStatuses(id),
-              ...(dbStatuses as Record<string, ConceptStatus>)
+              ...mappedStatuses
             })
           } catch (err) {
             console.error('Failed to load progress from DB:', err)
@@ -246,6 +263,21 @@ export default function PlanView() {
       }
     }
   }, [id, getToken])
+
+  useEffect(() => {
+    if (plan) {
+      const defaultTable = [
+        { day: 1, hours: plan.hours_per_day },
+        { day: 2, hours: plan.hours_per_day },
+        { day: 3, hours: plan.hours_per_day },
+        { day: 4, hours: plan.hours_per_day },
+        { day: 5, hours: plan.hours_per_day },
+        { day: 6, hours: 0 },
+        { day: 7, hours: 0 },
+      ]
+      setTempTimetable(plan.calendar_timetable || defaultTable)
+    }
+  }, [plan])
 
   useEffect(() => {
     if (isSignedIn && id && import.meta.env.VITE_API_VERSION === 'v2') {
@@ -313,6 +345,18 @@ export default function PlanView() {
       saveStatuses(id, next)
       return next
     })
+    setProgressDetails((prev) => {
+      const existing = prev[conceptId]
+      return {
+        ...prev,
+        [conceptId]: {
+          status: status,
+          mastery_pct: existing?.mastery_pct ?? 0,
+          retention_pct: existing?.retention_pct ?? 0,
+          next_review_at: existing?.next_review_at ?? null
+        }
+      }
+    })
     
     if (import.meta.env.VITE_API_VERSION === 'v2') {
       try {
@@ -367,6 +411,28 @@ export default function PlanView() {
         // Hide success notification after 3 seconds
         setTimeout(() => setReplanSuccess(false), 3000)
       }, 1800)
+    }
+  }
+
+  async function saveTimetableAndReplan() {
+    if (!plan || !id) return
+    try {
+      setSavingTimetable(true)
+      const token = await getToken()
+      const updatedPlan = await updatePlan(id, { calendar_timetable: tempTimetable }, token)
+      const updatedSchedule = await replanSchedule(id, token)
+      setPlan({
+        ...updatedPlan,
+        schedule: updatedSchedule
+      })
+      setReplanSuccess(true)
+      setShowTimetableEditor(false)
+    } catch (err) {
+      console.error("Failed to update timetable:", err)
+      setError("Failed to update timetable and reschedule.")
+    } finally {
+      setSavingTimetable(false)
+      setTimeout(() => setReplanSuccess(false), 3000)
     }
   }
 
@@ -601,6 +667,7 @@ export default function PlanView() {
             <ConceptGraph
               plan={plan}
               statuses={statuses}
+              progressDetails={progressDetails}
               onSelectConcept={setSelectedConcept}
               onSelectEdge={(fromId, toId, fromName, toName) => setSelectedEdge({ fromId, toId, fromName, toName })}
             />
@@ -611,10 +678,60 @@ export default function PlanView() {
       {/* VIEW 2: Calendar View */}
       {viewMode === 'calendar' && (
         <div className="space-y-8">
-          <div className="mb-4">
-            <h2 className="text-lg font-medium text-white">Chronological Calendar</h2>
-            <p className="text-sm text-slate-400">Sequential study plan matching topological sort dependencies.</p>
+          <div className="mb-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+            <div>
+              <h2 className="text-lg font-medium text-white">Chronological Calendar</h2>
+              <p className="text-sm text-slate-400">Sequential study plan matching topological sort dependencies.</p>
+            </div>
+            <button
+              onClick={() => setShowTimetableEditor(!showTimetableEditor)}
+              className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800 transition"
+            >
+              {showTimetableEditor ? 'Close Timetable' : '⚙️ Customize Timetable'}
+            </button>
           </div>
+
+          {/* Timetable Configuration Panel */}
+          {showTimetableEditor && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
+              <h3 className="text-sm font-semibold text-white">Configure Weekly Availability</h3>
+              <p className="text-xs text-slate-400">Set the hours you can dedicate to studying on each day. Rest days (0 hours) will skip concept packing.</p>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4">
+                {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((dayName, idx) => {
+                  const dayNum = idx + 1
+                  const dayEntry = tempTimetable.find(item => item.day === dayNum) || { day: dayNum, hours: 0 }
+                  return (
+                    <div key={dayNum} className="flex flex-col gap-1.5 p-3 rounded-xl bg-slate-950 border border-slate-900">
+                      <span className="text-xs text-slate-400 font-semibold">{dayName}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="12"
+                        step="0.5"
+                        value={dayEntry.hours}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0
+                          setTempTimetable(prev => prev.map(item => item.day === dayNum ? { ...item, hours: val } : item))
+                        }}
+                        className="w-full px-2 py-1 text-xs rounded bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="flex gap-3 justify-end mt-4">
+                <button
+                  onClick={() => saveTimetableAndReplan()}
+                  disabled={savingTimetable}
+                  className="px-4 py-2 text-xs font-bold rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white transition shadow-lg shadow-violet-500/20"
+                >
+                  {savingTimetable ? 'Saving...' : '💾 Save & Replan Schedule'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {weeksData.map(({ week, items }) => (
             <div key={week} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">

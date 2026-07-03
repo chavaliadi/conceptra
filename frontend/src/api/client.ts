@@ -12,7 +12,9 @@ import type {
   QuizGradeRequest,
   QuizGradeResponse,
   LearningProfile,
+  ConceptProgressDetail,
 } from '../types'
+
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { headers, ...restOptions } = options || {}
@@ -91,6 +93,23 @@ export function getPlan(id: string, token?: string | null): Promise<Plan> {
   return request<Plan>(`${API_PREFIX}/${id}`, { headers })
 }
 
+export function updatePlan(
+  id: string,
+  body: { calendar_timetable?: any[]; hours_per_day?: number; exam_date?: string | null },
+  token?: string | null,
+): Promise<Plan> {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return request<Plan>(`${API_PREFIX}/${id}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  })
+}
+
+
 export function getConceptContent(
   planId: string,
   conceptId: string,
@@ -103,7 +122,7 @@ export function getConceptContent(
   return request<ConceptContent>(`${API_PREFIX}/${planId}/concepts/${conceptId}/content`, { headers })
 }
 
-export function getProgress(planId: string, token?: string | null): Promise<Record<string, string>> {
+export function getProgress(planId: string, token?: string | null): Promise<Record<string, ConceptProgressDetail>> {
   if (!isV2) {
     return Promise.resolve({})
   }
@@ -111,8 +130,9 @@ export function getProgress(planId: string, token?: string | null): Promise<Reco
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
-  return request<Record<string, string>>(`${API_PREFIX}/${planId}/progress`, { headers })
+  return request<Record<string, ConceptProgressDetail>>(`${API_PREFIX}/${planId}/progress`, { headers })
 }
+
 
 export function updateProgress(
   planId: string,
