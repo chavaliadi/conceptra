@@ -27,7 +27,7 @@ from app.models.schemas import (
     AnalyticsResponse,
     ConceptProgressDetail
 )
-from app.models.database import Concept, Edge, ConceptContent, Progress, Schedule, ScheduleHistory
+from app.models.database import Plan, Concept, Edge, ConceptContent, Progress, Schedule, ScheduleHistory
 
 from app.repositories.plan_repository import PlanRepository, ContentRepository, ProgressRepository
 from app.fixtures.sample_plans import TOPIC_FIXTURES, get_fixture_for_topic
@@ -40,6 +40,33 @@ from app.api.routes.deps import get_current_user, get_required_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/plans", tags=["plans_v2"])
+
+async def verify_plan_access(
+    plan: Plan,
+    current_user: dict | None,
+    is_mutation: bool = False,
+    db: AsyncSession | None = None
+) -> None:
+    """
+    Unified authorization and ownership check for plans.
+    Fixes Fix 4 (protecting GET endpoints) and Fix 5 (auto-claiming unclaimed plans for the first authenticated caller).
+    """
+    if plan.clerk_user_id is not None:
+        if current_user and plan.clerk_user_id == current_user.get("sub"):
+            return
+        if not is_mutation and plan.is_public:
+            return
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required to access this private plan")
+        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    else:
+        # Unclaimed plan (clerk_user_id is None)
+        if current_user and current_user.get("sub"):
+            plan.clerk_user_id = current_user["sub"]
+            if db:
+                await db.flush()
+            logger.info(f"Auto-claimed unclaimed plan {plan.id} for user {current_user['sub']}")
+            return
 
 async def publish_progress(plan_id: UUID, stage: str, status: str = "generating", **kwargs):
     from app.services.cache_service import redis_client
@@ -136,6 +163,7 @@ async def generate_plan_background(
             for c_id in id_map.values():
                 G.add_node(c_id)
                 
+            sanitized_edges = []
             for e in edges:
                 from_uuid = id_map.get(e.from_id)
                 to_uuid = id_map.get(e.to_id)
@@ -156,10 +184,11 @@ async def generate_plan_background(
                         source=e.source
                     )
                     db.add(edge)
+                    sanitized_edges.append(e)
                     
             edges_payload = [
                 {"from_id": str(id_map[e.from_id]), "to_id": str(id_map[e.to_id])}
-                for e in edges if e.from_id in id_map and e.to_id in id_map
+                for e in sanitized_edges
             ]
             await publish_progress(plan_id, "graph_generated", edges=edges_payload)
             
@@ -172,7 +201,7 @@ async def generate_plan_background(
             ]
             edges_list = [
                 SchemaEdge(from_id=e.from_id, to_id=e.to_id)
-                for e in edges
+                for e in sanitized_edges
             ]
             sorted_ids = validate_and_sort_dag(
                 [{"id": c.id} for c in concepts_list],
@@ -254,7 +283,7 @@ async def generate_plan_background(
             await publish_progress(plan_id, "content_generated", content=content_payload)
             
             # Initialize progress records
-            for concept_uuid in id_map.values():
+            for concept_uuid in set(id_map.values()):
                 db.add(Progress(plan_id=plan_id, concept_id=concept_uuid, status="untouched"))
                 
             # Mark plan as completed
@@ -396,7 +425,7 @@ async def _create_plan_logic(
                 )
                 
         # Insert progress initialization
-        for concept_uuid in id_map.values():
+        for concept_uuid in set(id_map.values()):
             db.add(Progress(plan_id=plan.id, concept_id=concept_uuid, status="untouched"))
             
         await db.commit()
@@ -459,7 +488,7 @@ async def _create_plan_logic(
                     )
                     
             # Initialize progress records
-            for concept_uuid in id_map.values():
+            for concept_uuid in set(id_map.values()):
                 db.add(Progress(plan_id=plan.id, concept_id=concept_uuid, status="untouched"))
                 
             await db.commit()
@@ -494,11 +523,14 @@ async def _create_plan_logic(
 @router.get("/{plan_id}", response_model=PlanResponse)
 async def get_plan_endpoint(
     plan_id: UUID,
+    current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> PlanResponse:
     plan = await PlanRepository.get_by_id(db, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
+        
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
         
     # Format concepts
     concepts_list = [
@@ -638,8 +670,7 @@ async def delete_plan_endpoint(
     plan = await PlanRepository.get_by_id(db, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
-    if plan.clerk_user_id is not None and plan.clerk_user_id != current_user["sub"]:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
         
     await PlanRepository.delete(db, plan_id)
 
@@ -674,9 +705,7 @@ async def update_progress_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to update progress on this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     status_val = payload.get("status")
     if not status_val or status_val not in ["untouched", "learned", "struggling", "skipped"]:
@@ -696,9 +725,7 @@ async def update_plan_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to edit this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
             
     if "calendar_timetable" in payload:
         plan.calendar_timetable = payload["calendar_timetable"]
@@ -815,9 +842,7 @@ async def replan_schedule_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to replan this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     # Fetch progress
     progress_map = await ProgressRepository.get_progress(db, plan_id)
@@ -916,8 +941,15 @@ async def replan_schedule_endpoint(
 @router.get("/{plan_id}/progress", response_model=dict[str, ConceptProgressDetail])
 async def get_all_progress_endpoint(
     plan_id: UUID,
+    current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> dict[str, ConceptProgressDetail]:
+    plan = await PlanRepository.get_by_id(db, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+        
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
+
     result = await db.execute(
         select(Progress).where(Progress.plan_id == plan_id)
     )
@@ -947,9 +979,7 @@ async def get_due_reviews_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to access reviews for this plan")
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
 
     stmt = (
         select(Progress)
@@ -1056,9 +1086,7 @@ async def review_concept_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to submit reviews for this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     stmt = select(Progress).where(Progress.plan_id == plan_id, Progress.concept_id == concept_id)
     res = await db.execute(stmt)
@@ -1105,9 +1133,7 @@ async def get_plan_analytics_endpoint(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
         
-    if plan.clerk_user_id is not None:
-        if not current_user or plan.clerk_user_id != current_user["sub"]:
-            raise HTTPException(status_code=403, detail="Not authorized to access analytics for this plan")
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
 
     total_concepts = len(plan.concepts)
     
@@ -1227,11 +1253,14 @@ async def get_plan_analytics_endpoint(
 async def get_concept_content_endpoint(
     plan_id: UUID,
     concept_id: UUID,
+    current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> SchemaConceptContent:
     plan = await PlanRepository.get_by_id(db, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
+        
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
         
     concept = next((c for c in plan.concepts if c.id == concept_id), None)
     if not concept or not concept.content:
@@ -1385,6 +1414,7 @@ async def stream_plan_endpoint(
 @router.get("/{plan_id}/export/pdf")
 async def export_pdf_endpoint(
     plan_id: UUID,
+    current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Export the study plan as a printable PDF study guide."""
@@ -1393,6 +1423,8 @@ async def export_pdf_endpoint(
     plan = await PlanRepository.get_by_id(db, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
+        
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
         
     try:
         pdf_data = generate_study_guide_pdf(plan)
@@ -1410,6 +1442,7 @@ async def export_pdf_endpoint(
 @router.get("/{plan_id}/export/ics")
 async def export_ics_endpoint(
     plan_id: UUID,
+    current_user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Export the study calendar as an iCalendar (.ics) subscription."""
@@ -1418,6 +1451,8 @@ async def export_ics_endpoint(
     plan = await PlanRepository.get_by_id(db, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
+        
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
         
     try:
         ics_data = generate_study_schedule_ics(plan)
@@ -1430,5 +1465,3 @@ async def export_ics_endpoint(
     except Exception as e:
         logger.error(f"Failed to generate iCalendar schedule: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate calendar: {str(e)}")
-
-
