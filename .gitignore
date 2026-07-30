@@ -13,3 +13,6 @@ frontend/dist/
 .DS_Store
 .env
 *.local
+
+.agents
+

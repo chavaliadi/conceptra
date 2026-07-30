@@ -224,7 +224,7 @@ This grounds the tutor in your personal memory profile, yielding highly contextu
 - **Database:** PostgreSQL (Port 5435).
 - **Cache & Pub/Sub:** Redis (Port 6379) for caching database plans and broadcasting progress updates.
 - **Background Worker:** Redis Queue (RQ) worker running async syllabus extraction, DAG cycle checking, and content generation.
-- **LLM Pipeline:** Groq API using `llama-3.1-70b-versatile` for language modeling.
+- **LLM Pipeline:** Groq API using `openai/gpt-oss-120b` for language modeling.
 
 ---
 

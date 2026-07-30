@@ -1202,7 +1202,7 @@ We have fully implemented and verified all Phase 3 objectives, transitioning Con
 
 ### Features Completed
 - **Clerk Authentication Integration:** Secured the application using Clerk. Verified RS256 JWT tokens on the backend using Clerk's JWKS endpoint. Supported plan claiming (binding anonymous plans to users on sign-up) and user-owned dashboard lists.
-- **AI-Driven Adaptive Replanning:** Built a schedule optimizer utilizing `networkx.descendants()` to locate struggling concept dependencies and redistributed remaining concepts using Groq Llama-3.3-70b-versatile, maintaining audit trails in `schedule_history`.
+- **AI-Driven Adaptive Replanning:** Built a schedule optimizer utilizing `networkx.descendants()` to locate struggling concept dependencies and redistributed remaining concepts using Groq `openai/gpt-oss-120b`, maintaining audit trails in `schedule_history`.
 - **Spaced Repetition System (SRS):** Built a flashcard review pipeline utilizing the SM-2 algorithm. Introduced interactive review decks with confidence grading (1-5) to dynamically update study intervals.
 - **Progress Analytics Dashboard:** Designed SVG progress meters, completion projections, and pacing stats dynamically calculated from database progress logs.
 - **SSE Streaming Generation:** Developed a Server-Sent Events stream using Redis PubSub (with database polling fallback) that renders concept-by-concept loading screens with animations as the AI designs the study plan.

@@ -60,7 +60,7 @@ We deploy the FastAPI server, PostgreSQL, Redis, and the RQ worker as separate s
 | `DATABASE_URL` | SQLAlchemy Connection URL (psycopg2 for migrations, asyncpg for API) | Postgres Connection String |
 | `REDIS_URL` | Redis URL for cache, PubSub, and RQ | Redis Connection String |
 | `GROQ_API_KEY` | Groq developer API key | Groq Console |
-| `GROQ_MODEL` | LLM model to run completions | `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | LLM model to run completions | `openai/gpt-oss-120b` |
 | `SENTRY_DSN` | Exception reporting URL (optional) | Sentry Project Settings |
 
 *Note: In Railway, database variables like `DATABASE_URL` can be automatically referenced from provisioned database services using `${{ Postgres.DATABASE_URL }}`.*

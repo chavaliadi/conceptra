@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "architect": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/architect/SKILL.md",
+      "computedHash": "0397f01f00c4bb716d0a6199ee217834a8bc8db9175bd0bcf2d438d71d97dd7a"
+    },
+    "audit": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/audit/SKILL.md",
+      "computedHash": "9ce277225fa0cfb283717e943150e9e61f590a9c79b08181ddc09dd32b5e40c9"
+    },
+    "check": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/check/SKILL.md",
+      "computedHash": "f57678c12ecc72e4d4e1bb384f41924293f1e58b7a92a0a37f87ded412a540da"
+    },
+    "debug": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/debug/SKILL.md",
+      "computedHash": "e8c4672415244af936c8c2cb797d2ea3dcbebf61631fb7d5e75abe29ff05bd5a"
+    },
+    "develop": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/develop/SKILL.md",
+      "computedHash": "245688b798cd22b847d393d3e557f48210769a745b82547026a67407e8cc8cc7"
+    },
+    "document": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/document/SKILL.md",
+      "computedHash": "68f768feb819eb6b7866b8a85e42a30e7d5ef20a1380b307ab22ccc1563532e8"
+    },
+    "scope": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/scope/SKILL.md",
+      "computedHash": "cc0c9ad797d81ab7466aa647ed7a62376e7734e6cb85b6c94d6f9b8ab997b7e5"
+    },
+    "sync": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/sync/SKILL.md",
+      "computedHash": "fa3a2ef8c71a72dac4e0e1210333cb77aa9fb7722363a9f95c67577c4ff1f4f1"
+    },
+    "test": {
+      "source": "JavaScript-Mastery-Pro/skills",
+      "sourceType": "github",
+      "skillPath": "skills/test/SKILL.md",
+      "computedHash": "1f85ef21aacbf8d02f0543f649ab908644fc58436463c3bb1908afc4201e1b83"
+    }
+  }
+}

@@ -109,7 +109,7 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1000)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2500)
             # Validate with Pydantic
             validated = ExtractResponse.model_validate(result_json)
             return validated
@@ -154,7 +154,7 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=600)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1500)
             # Validate with Pydantic (which runs DAG cycle checking)
             validated = GraphResponse.model_validate(result_json)
             return validated.edges
@@ -226,7 +226,7 @@ async def generate_single_concept_content(concept: AIConceptItem, subject_domain
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1000)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2500)
             # Validate with Pydantic
             validated = ConceptContentAI.model_validate(result_json)
             return validated
@@ -239,7 +239,7 @@ async def generate_single_concept_content(concept: AIConceptItem, subject_domain
 async def generate_content(concepts: List[AIConceptItem], subject_domain: str | None = None) -> List[ConceptContentAI]:
     """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
     # Semaphore(4): allow up to 4 concurrent Groq calls.
-    # llama-3.3-70b-versatile TPM limit is 12k; each content call uses ~600 tokens max,
+    # openai/gpt-oss-120b TPM limit; each content call uses ~600 tokens max,
     # so 4 concurrent calls reserve ~2400 tokens/s - well within safe burst limits.
     # The stagger is intentionally removed: the semaphore itself controls throughput,
     # and pre-semaphore staggering was causing up to 9.6s of artificial idle waiting.
@@ -327,7 +327,7 @@ async def replan_schedule(
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=500)
+            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2000)
             validated = ReplanResponse.model_validate(result_json)
             return validated.schedule
         except Exception as e:

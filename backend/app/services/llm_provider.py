@@ -26,7 +26,7 @@ class LLMProvider(ABC):
 class GroqProvider(LLMProvider):
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
-        self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
         if not self.api_key:
             logger.warning("GROQ_API_KEY is not set in environment variables.")
@@ -68,11 +68,11 @@ class GroqProvider(LLMProvider):
                 # For per-minute limits (TPM/RPM), re-raise so the caller's retry logic
                 # can sleep precisely using the Groq 'try again in Xs' message and retry
                 # with the full-quality model — avoiding cascading failures on the
-                # weaker llama-3.1-8b-instant which has a lower 6k TPM limit.
+                # weaker fallback model.
                 is_daily_limit = "per_day" in error_body or "per_hour" in error_body
-                if is_daily_limit and payload.get("model") == "llama-3.3-70b-versatile":
+                if is_daily_limit and payload.get("model") == "openai/gpt-oss-120b":
                     logger.warning(
-                        "Groq daily/hourly quota exhausted on llama-3.3-70b-versatile. "
+                        "Groq daily/hourly quota exhausted on openai/gpt-oss-120b. "
                         "Falling back to llama-3.1-8b-instant permanently..."
                     )
                     self.model = "llama-3.1-8b-instant"
@@ -97,7 +97,7 @@ class GroqProvider(LLMProvider):
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
                 
-                # Approximate pricing for Llama-3.3-70b-versatile: $0.59/M prompt, $0.79/M completion
+                # Approximate pricing for openai/gpt-oss-120b ($0.15/M prompt, $0.60/M completion):
                 cost = (prompt_tokens * 0.59 + completion_tokens * 0.79) / 1000000.0
                 latency = int(response.elapsed.total_seconds() * 1000)
 
