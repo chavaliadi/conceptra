@@ -5,6 +5,11 @@ from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.database import Plan, Concept
+
 from app.models.database import Base
 
 class TutorChatMessage(Base):

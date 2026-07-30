@@ -200,76 +200,76 @@ async def chat_with_tutor(
     misconceptions_res = await db.execute(misconceptions_stmt)
     misconceptions = list(misconceptions_res.scalars().all())
 
-     misconceptions_str = ""
-     if misconceptions:
-         misconceptions_str = "\nStudent's Recent Confident-Incorrect Misconceptions (they answered incorrectly while feeling confident):\n"
-         for idx, m in enumerate(misconceptions):
-             selected = m.selected_option_index
-             correct = m.correct_option_index
-             selected_str = m.options[selected] if (m.options and 0 <= selected < len(m.options)) else f"Option index {selected}"
-             correct_str = m.options[correct] if (m.options and 0 <= correct < len(m.options)) else f"Option index {correct}"
-             misconceptions_str += f"- Question: \"{m.question_text}\"\n  They selected: \"{selected_str}\" (Correct Answer: \"{correct_str}\")\n"
+    misconceptions_str = ""
+    if misconceptions:
+        misconceptions_str = "\nStudent's Recent Confident-Incorrect Misconceptions (they answered incorrectly while feeling confident):\n"
+        for idx, m in enumerate(misconceptions):
+            selected = m.selected_option_index
+            correct = m.correct_option_index
+            selected_str = m.options[selected] if (m.options and 0 <= selected < len(m.options)) else f"Option index {selected}"
+            correct_str = m.options[correct] if (m.options and 0 <= correct < len(m.options)) else f"Option index {correct}"
+            misconceptions_str += f"- Question: \"{m.question_text}\"\n  They selected: \"{selected_str}\" (Correct Answer: \"{correct_str}\")\n"
 
-     # RAG Grounding: Fetch prerequisite concepts and their mastery progress
-     prereq_stmt = select(Edge).where(Edge.plan_id == plan_id, Edge.to_concept_id == concept_id)
-     prereq_res = await db.execute(prereq_stmt)
-     prereq_edges = prereq_res.scalars().all()
-     
-     prereq_mastery_info = []
-     if prereq_edges:
-         prereq_ids = [edge.from_concept_id for edge in prereq_edges]
-         prereq_details_stmt = (
-             select(Concept, Progress)
-             .join(Progress, Progress.concept_id == Concept.id)
-             .where(Concept.id.in_(prereq_ids))
-         )
-         prereq_details_res = await db.execute(prereq_details_stmt)
-         for p_concept, p_prog in prereq_details_res:
-             prereq_mastery_info.append(
-                 f"- Prerequisite \"{p_concept.name}\" Mastery: {p_prog.mastery_pct:.1f}% (Status: {p_prog.status})"
-             )
-     prereq_context_str = "\n".join(prereq_mastery_info) if prereq_mastery_info else "None"
+    # RAG Grounding: Fetch prerequisite concepts and their mastery progress
+    prereq_stmt = select(Edge).where(Edge.plan_id == plan_id, Edge.to_concept_id == concept_id)
+    prereq_res = await db.execute(prereq_stmt)
+    prereq_edges = prereq_res.scalars().all()
+    
+    prereq_mastery_info = []
+    if prereq_edges:
+        prereq_ids = [edge.from_concept_id for edge in prereq_edges]
+        prereq_details_stmt = (
+            select(Concept, Progress)
+            .join(Progress, Progress.concept_id == Concept.id)
+            .where(Concept.id.in_(prereq_ids))
+        )
+        prereq_details_res = await db.execute(prereq_details_stmt)
+        for p_concept, p_prog in prereq_details_res:
+            prereq_mastery_info.append(
+                f"- Prerequisite \"{p_concept.name}\" Mastery: {p_prog.mastery_pct:.1f}% (Status: {p_prog.status})"
+            )
+    prereq_context_str = "\n".join(prereq_mastery_info) if prereq_mastery_info else "None"
 
-     # RAG Grounding: Fetch student's entire quiz telemetry for this concept
-     all_attempts_stmt = select(QuizAttempt).where(QuizAttempt.plan_id == plan_id, QuizAttempt.concept_id == concept_id)
-     all_attempts_res = await db.execute(all_attempts_stmt)
-     all_attempts = all_attempts_res.scalars().all()
-     
-     total_attempts = len(all_attempts)
-     correct_attempts = sum(1 for a in all_attempts if a.is_correct)
-     avg_confidence = sum(a.confidence_reported for a in all_attempts) / total_attempts if total_attempts > 0 else 0.0
-     quiz_telemetry_str = f"Attempted {total_attempts} questions ({correct_attempts} correct, {total_attempts - correct_attempts} incorrect) with average reported confidence of {avg_confidence * 100.0:.1f}%."
+    # RAG Grounding: Fetch student's entire quiz telemetry for this concept
+    all_attempts_stmt = select(QuizAttempt).where(QuizAttempt.plan_id == plan_id, QuizAttempt.concept_id == concept_id)
+    all_attempts_res = await db.execute(all_attempts_stmt)
+    all_attempts = all_attempts_res.scalars().all()
+    
+    total_attempts = len(all_attempts)
+    correct_attempts = sum(1 for a in all_attempts if a.is_correct)
+    avg_confidence = sum(a.confidence_reported for a in all_attempts) / total_attempts if total_attempts > 0 else 0.0
+    quiz_telemetry_str = f"Attempted {total_attempts} questions ({correct_attempts} correct, {total_attempts - correct_attempts} incorrect) with average reported confidence of {avg_confidence * 100.0:.1f}%."
 
-     # Save User Message
-     user_msg = TutorChatMessage(
-         plan_id=plan_id,
-         concept_id=concept_id,
-         role="user",
-         content=req.message,
-     )
-     db.add(user_msg)
+    # Save User Message
+    user_msg = TutorChatMessage(
+        plan_id=plan_id,
+        concept_id=concept_id,
+        role="user",
+        content=req.message,
+    )
+    db.add(user_msg)
 
-     # Load history (limit to last 10 messages to keep context window efficient)
-     hist_stmt = (
-         select(TutorChatMessage)
-         .where(
-             TutorChatMessage.plan_id == plan_id,
-             TutorChatMessage.concept_id == concept_id,
-         )
-         .order_by(TutorChatMessage.created_at.desc())
-         .limit(10)
-     )
-     hist_res = await db.execute(hist_stmt)
-     history = list(hist_res.scalars().all())
-     history.reverse()
+    # Load history (limit to last 10 messages to keep context window efficient)
+    hist_stmt = (
+        select(TutorChatMessage)
+        .where(
+            TutorChatMessage.plan_id == plan_id,
+            TutorChatMessage.concept_id == concept_id,
+        )
+        .order_by(TutorChatMessage.created_at.desc())
+        .limit(10)
+    )
+    hist_res = await db.execute(hist_stmt)
+    history = list(hist_res.scalars().all())
+    history.reverse()
 
-     # Build context message string
-     chat_history_str = ""
-     for h in history:
-         chat_history_str += f"{h.role.capitalize()}: {h.content}\n"
+    # Build context message string
+    chat_history_str = ""
+    for h in history:
+        chat_history_str += f"{h.role.capitalize()}: {h.content}\n"
 
-     # Define system prompt with rich RAG telemetry grounding
-     system_prompt = f"""You are an elite, supportive AI tutor for the concept: "{concept.name}".
+    # Define system prompt with rich RAG telemetry grounding
+    system_prompt = f"""You are an elite, supportive AI tutor for the concept: "{concept.name}".
 Concept Description: {concept.description or "N/A"}
 Detailed Concept Explanation: {explanation}
 
