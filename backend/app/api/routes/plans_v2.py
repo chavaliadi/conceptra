@@ -710,6 +710,16 @@ async def update_progress_endpoint(
     status_val = payload.get("status")
     if not status_val or status_val not in ["untouched", "learned", "struggling", "skipped"]:
         raise HTTPException(status_code=400, detail="Invalid status value")
+
+    # Enforce prerequisite Review Debt gating if attempting to mark as learned
+    if status_val == "learned":
+        from app.services.review_debt_service import check_prerequisite_review_debt
+        is_blocked, blocking_name, block_reason = await check_prerequisite_review_debt(db, plan_id, concept_id)
+        if is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Concept is locked. {block_reason}"
+            )
         
     await ProgressRepository.update_status(db, plan_id, concept_id, status_val)
     return {"status": status_val}
@@ -1094,6 +1104,16 @@ async def review_concept_endpoint(
 
     if not progress_rec:
         raise HTTPException(status_code=404, detail="Progress record not found for this concept")
+
+    # Enforce prerequisite Review Debt gating if submitting a successful review (rating >= 3)
+    if rating >= 3:
+        from app.services.review_debt_service import check_prerequisite_review_debt
+        is_blocked, blocking_name, block_reason = await check_prerequisite_review_debt(db, plan_id, concept_id)
+        if is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Concept is locked. {block_reason}"
+            )
 
     from app.services.scheduler import calculate_next_review
     new_rep, new_ef, new_interval, next_review_at = calculate_next_review(

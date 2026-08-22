@@ -253,3 +253,229 @@ async def test_tutor_chat_remains_accessible_when_prerequisite_in_review_debt():
         response = await chat_with_tutor(plan_id, c2_id, chat_req, db=mock_db, current_user=current_user)
 
     assert response.reply == "Tutor guidance helping bridge prerequisite understanding."
+
+from app.api.routes.plans_v2 import review_concept_endpoint, update_progress_endpoint
+
+@pytest.mark.asyncio
+async def test_review_rating_returns_409_when_prerequisite_in_review_debt():
+    """Verify that submitting a rating (>=3) on a concept with prerequisite in Review Debt returns HTTP 409."""
+    plan_id = uuid4()
+    c1_id = uuid4()
+    c2_id = uuid4()
+
+    mock_plan = MagicMock(spec=Plan, id=plan_id, clerk_user_id="user_123")
+    mock_c1 = MagicMock(spec=Concept, id=c1_id)
+    mock_c1.name = "Prerequisite A"
+    mock_c1_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c1_id,
+        status="learned",
+        mastery_pct=80.0,
+        retention_pct=25.0,
+        interval_days=1,
+        last_reviewed_at=datetime.now(timezone.utc) - timedelta(days=10),
+        next_review_at=datetime.now(timezone.utc) - timedelta(days=5)
+    )
+
+    mock_c2_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c2_id,
+        repetitions=0,
+        ease_factor=2.5,
+        interval_days=0,
+        status="untouched"
+    )
+    mock_edge = MagicMock(spec=Edge, from_concept_id=c1_id, to_concept_id=c2_id)
+
+    mock_db = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    async def mock_execute(stmt):
+        stmt_str = str(stmt)
+        res = MagicMock()
+        if "JOIN progress" in stmt_str:
+            res.all.return_value = [(mock_c1, mock_c1_progress)]
+            res.__iter__.return_value = [(mock_c1, mock_c1_progress)]
+        elif "FROM edges" in stmt_str:
+            res.scalars.return_value.all.return_value = [mock_edge]
+        elif "FROM progress" in stmt_str:
+            res.scalars.return_value.first.return_value = mock_c2_progress
+        return res
+
+    mock_db.execute = mock_execute
+    current_user = {"sub": "user_123"}
+
+    with patch("app.repositories.plan_repository.PlanRepository.get_by_id", AsyncMock(return_value=mock_plan)):
+        with pytest.raises(HTTPException) as exc_info:
+            await review_concept_endpoint(plan_id, c2_id, {"rating": 5}, current_user=current_user, db=mock_db)
+
+    assert exc_info.value.status_code == 409
+    assert "Concept is locked" in exc_info.value.detail
+
+@pytest.mark.asyncio
+async def test_review_rating_returns_200_when_prerequisite_is_healthy():
+    """Verify that submitting a rating on a healthy concept returns HTTP 200 and marks status learned."""
+    plan_id = uuid4()
+    c1_id = uuid4()
+    c2_id = uuid4()
+
+    mock_plan = MagicMock(spec=Plan, id=plan_id, clerk_user_id="user_123")
+    mock_c1 = MagicMock(spec=Concept, id=c1_id)
+    mock_c1.name = "Prerequisite A"
+    mock_c1_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c1_id,
+        status="learned",
+        mastery_pct=95.0,
+        retention_pct=90.0,
+        interval_days=6,
+        last_reviewed_at=datetime.now(timezone.utc),
+        next_review_at=datetime.now(timezone.utc) + timedelta(days=6)
+    )
+
+    mock_c2_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c2_id,
+        repetitions=0,
+        ease_factor=2.5,
+        interval_days=0,
+        status="untouched"
+    )
+    mock_edge = MagicMock(spec=Edge, from_concept_id=c1_id, to_concept_id=c2_id)
+
+    mock_db = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    async def mock_execute(stmt):
+        stmt_str = str(stmt)
+        res = MagicMock()
+        if "JOIN progress" in stmt_str:
+            res.all.return_value = [(mock_c1, mock_c1_progress)]
+            res.__iter__.return_value = [(mock_c1, mock_c1_progress)]
+        elif "FROM edges" in stmt_str:
+            res.scalars.return_value.all.return_value = [mock_edge]
+        elif "FROM progress" in stmt_str:
+            res.scalars.return_value.first.return_value = mock_c2_progress
+        return res
+
+    mock_db.execute = mock_execute
+    current_user = {"sub": "user_123"}
+
+    with patch("app.repositories.plan_repository.PlanRepository.get_by_id", AsyncMock(return_value=mock_plan)):
+        res = await review_concept_endpoint(plan_id, c2_id, {"rating": 5}, current_user=current_user, db=mock_db)
+
+    assert res["status"] == "learned"
+    assert res["repetitions"] == 1
+
+@pytest.mark.asyncio
+async def test_patch_progress_learned_returns_409_when_prerequisite_in_review_debt():
+    """Verify that manual PATCH to learned returns HTTP 409 when prerequisite is in Review Debt."""
+    plan_id = uuid4()
+    c1_id = uuid4()
+    c2_id = uuid4()
+
+    mock_plan = MagicMock(spec=Plan, id=plan_id, clerk_user_id="user_123")
+    mock_c1 = MagicMock(spec=Concept, id=c1_id)
+    mock_c1.name = "Prerequisite A"
+    mock_c1_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c1_id,
+        status="learned",
+        mastery_pct=80.0,
+        retention_pct=25.0,
+        interval_days=1,
+        last_reviewed_at=datetime.now(timezone.utc) - timedelta(days=10),
+        next_review_at=datetime.now(timezone.utc) - timedelta(days=5)
+    )
+    mock_edge = MagicMock(spec=Edge, from_concept_id=c1_id, to_concept_id=c2_id)
+
+    mock_db = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    async def mock_execute(stmt):
+        stmt_str = str(stmt)
+        res = MagicMock()
+        if "JOIN progress" in stmt_str:
+            res.all.return_value = [(mock_c1, mock_c1_progress)]
+            res.__iter__.return_value = [(mock_c1, mock_c1_progress)]
+        elif "FROM edges" in stmt_str:
+            res.scalars.return_value.all.return_value = [mock_edge]
+        return res
+
+    mock_db.execute = mock_execute
+    current_user = {"sub": "user_123"}
+
+    with patch("app.repositories.plan_repository.PlanRepository.get_by_id", AsyncMock(return_value=mock_plan)):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_progress_endpoint(plan_id, c2_id, {"status": "learned"}, current_user=current_user, db=mock_db)
+
+    assert exc_info.value.status_code == 409
+    assert "Concept is locked" in exc_info.value.detail
+
+@pytest.mark.asyncio
+async def test_patch_progress_learned_returns_200_when_prerequisite_is_healthy():
+    """Verify that manual PATCH to learned succeeds (HTTP 200) when all prerequisites are healthy."""
+    plan_id = uuid4()
+    c1_id = uuid4()
+    c2_id = uuid4()
+
+    mock_plan = MagicMock(spec=Plan, id=plan_id, clerk_user_id="user_123")
+    mock_c1 = MagicMock(spec=Concept, id=c1_id)
+    mock_c1.name = "Prerequisite A"
+    mock_c1_progress = MagicMock(
+        spec=Progress,
+        plan_id=plan_id,
+        concept_id=c1_id,
+        status="learned",
+        mastery_pct=95.0,
+        retention_pct=95.0,
+        interval_days=6,
+        last_reviewed_at=datetime.now(timezone.utc),
+        next_review_at=datetime.now(timezone.utc) + timedelta(days=6)
+    )
+    mock_edge = MagicMock(spec=Edge, from_concept_id=c1_id, to_concept_id=c2_id)
+
+    mock_db = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    async def mock_execute(stmt):
+        stmt_str = str(stmt)
+        res = MagicMock()
+        if "JOIN progress" in stmt_str:
+            res.all.return_value = [(mock_c1, mock_c1_progress)]
+            res.__iter__.return_value = [(mock_c1, mock_c1_progress)]
+        elif "FROM edges" in stmt_str:
+            res.scalars.return_value.all.return_value = [mock_edge]
+        return res
+
+    mock_db.execute = mock_execute
+    current_user = {"sub": "user_123"}
+
+    with patch("app.repositories.plan_repository.PlanRepository.get_by_id", AsyncMock(return_value=mock_plan)):
+        with patch("app.repositories.plan_repository.ProgressRepository.update_status", AsyncMock()):
+            res = await update_progress_endpoint(plan_id, c2_id, {"status": "learned"}, current_user=current_user, db=mock_db)
+
+    assert res["status"] == "learned"
+
+@pytest.mark.asyncio
+async def test_patch_progress_skipped_allowed_even_with_prerequisite_in_debt():
+    """Verify that manual PATCH to 'skipped' remains permitted without 409 block."""
+    plan_id = uuid4()
+    c2_id = uuid4()
+
+    mock_plan = MagicMock(spec=Plan, id=plan_id, clerk_user_id="user_123")
+    mock_db = MagicMock()
+
+    current_user = {"sub": "user_123"}
+
+    with patch("app.repositories.plan_repository.PlanRepository.get_by_id", AsyncMock(return_value=mock_plan)):
+        with patch("app.repositories.plan_repository.ProgressRepository.update_status", AsyncMock()):
+            res = await update_progress_endpoint(plan_id, c2_id, {"status": "skipped"}, current_user=current_user, db=mock_db)
+
+    assert res["status"] == "skipped"
+
