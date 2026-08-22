@@ -29,21 +29,25 @@ async def _call_groq_json(prompt: str, system_prompt: str = "You are a helpful a
     raise ValueError("Expected JSON response from LLMProvider")
 
 async def _handle_retry_sleep(attempt: int, error: Exception):
-    """Parse retry-after time from Groq error message and sleep, adding jitter to avoid collision."""
+    """Sleep before retry, parsing retry-after time if rate limited."""
     import random
-    sleep_time = 3 * attempt + random.uniform(0.5, 2.0)
-    try:
-        import re
+    import re
+    
+    is_rate_limit = "rate limit" in str(error).lower() or "429" in str(error)
+    if is_rate_limit:
+        sleep_time = 3 * attempt + random.uniform(0.5, 2.0)
         match = re.search(r"try again in ([\d\.]+)s", str(error))
         if match:
             sleep_time = float(match.group(1)) + random.uniform(0.5, 1.5)
-    except Exception:
-        pass
-    logger.info(f"Rate limit hit. Sleeping for {sleep_time:.2f} seconds before retry attempt {attempt + 1}")
+    else:
+        # Brief pause for schema / validation error retries
+        sleep_time = 0.05
+    
+    logger.info(f"Retrying after error: {error}. Sleeping for {sleep_time:.2f}s before attempt {attempt + 1}")
     await asyncio.sleep(sleep_time)
 
 async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str | None = None) -> ExtractResponse:
-    """Stage 1: Extract concepts from a topic or syllabus text with up to 5 retries."""
+    """Stage 1: Extract concepts from a topic or syllabus text with up to 5 retries (using LLM error correction prompts)."""
     system_prompt = "You are an expert curriculum builder that outputs valid JSON matching the requested structure."
     
     if syllabus_text:
@@ -106,10 +110,11 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
            - "is_inferred_reading": true (since we do not have a syllabus).
         """
     
+    current_prompt = prompt
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2500)
+            result_json = await _call_groq_json(current_prompt, system_prompt, temperature=temp, max_tokens=2500)
             # Validate with Pydantic
             validated = ExtractResponse.model_validate(result_json)
             return validated
@@ -117,10 +122,18 @@ async def extract_concepts(topic: str, num_concepts: int = 8, syllabus_text: str
             logger.warning(f"Stage 1 extraction attempt {attempt} failed: {e}")
             if attempt == 5:
                 raise RuntimeError(f"Failed to extract concepts after 5 attempts: {e}")
+            correction_note = f"""
+CORRECTION REQUIRED (Previous Attempt Failed):
+Your previous response failed validation with the following error:
+{e}
+
+Please fix this specific issue in your JSON output. Ensure the output strictly conforms to the requested schema, concept count, and constraints.
+"""
+            current_prompt = f"{prompt}\n\n{correction_note}"
             await _handle_retry_sleep(attempt, e)
 
 async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
-    """Stage 2: Build dependency edges between concepts with up to 5 retries (including DAG validation)."""
+    """Stage 2: Build dependency edges between concepts with up to 5 retries (including DAG validation and error correction)."""
     concepts_data = [
         {
             "id": c.id, 
@@ -151,10 +164,11 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
     3. Ensure there is a path through all concepts where possible, but keep edges reasonable (typically N-1 to N*1.5 edges).
     """
     
+    current_prompt = prompt
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=1500)
+            result_json = await _call_groq_json(current_prompt, system_prompt, temperature=temp, max_tokens=1500)
             # Validate with Pydantic (which runs DAG cycle checking)
             validated = GraphResponse.model_validate(result_json)
             return validated.edges
@@ -162,6 +176,18 @@ async def build_graph(concepts: List[AIConceptItem]) -> List[AIEdge]:
             logger.warning(f"Stage 2 graph generation attempt {attempt} failed: {e}")
             if attempt == 5:
                 raise RuntimeError(f"Failed to generate dependency graph after 5 attempts: {e}")
+            correction_note = f"""
+CORRECTION REQUIRED (Previous Attempt Failed):
+Your previous response failed validation with the following error:
+{e}
+
+CRITICAL FIX INSTRUCTIONS:
+- If the graph contained cycles or circular dependencies (e.g. A -> B and B -> A), identify the cycle and remove or reverse one of the conflicting edges.
+- Ensure every edge strictly flows from prerequisite to dependent.
+- Ensure no self-loops exist (from_id cannot equal to_id).
+- Ensure output strictly matches the GraphResponse schema.
+"""
+            current_prompt = f"{prompt}\n\n{correction_note}"
             await _handle_retry_sleep(attempt, e)
 
 async def generate_single_concept_content(concept: AIConceptItem, subject_domain: str | None = None) -> ConceptContentAI:
@@ -223,10 +249,11 @@ async def generate_single_concept_content(concept: AIConceptItem, subject_domain
        - Do NOT include any "url" key.
     """
     
+    current_prompt = prompt
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2500)
+            result_json = await _call_groq_json(current_prompt, system_prompt, temperature=temp, max_tokens=2500)
             # Validate with Pydantic
             validated = ConceptContentAI.model_validate(result_json)
             return validated
@@ -234,15 +261,18 @@ async def generate_single_concept_content(concept: AIConceptItem, subject_domain
             logger.warning(f"Stage 4 single concept content generation attempt {attempt} for {concept.name} failed: {e}")
             if attempt == 5:
                 raise RuntimeError(f"Failed to generate content for concept {concept.name} after 5 attempts: {e}")
+            correction_note = f"""
+CORRECTION REQUIRED (Previous Attempt Failed):
+Your previous response failed validation with the following error:
+{e}
+
+Please fix this specific issue in your JSON output. Ensure exactly 3 MCQs (each with 4 options and valid correct_option_index) and complete markdown explanation sections.
+"""
+            current_prompt = f"{prompt}\n\n{correction_note}"
             await _handle_retry_sleep(attempt, e)
 
 async def generate_content(concepts: List[AIConceptItem], subject_domain: str | None = None) -> List[ConceptContentAI]:
     """Stage 4: Generate explanations, quizzes, and resources for all concepts concurrently."""
-    # Semaphore(4): allow up to 4 concurrent Groq calls.
-    # openai/gpt-oss-120b TPM limit; each content call uses ~600 tokens max,
-    # so 4 concurrent calls reserve ~2400 tokens/s - well within safe burst limits.
-    # The stagger is intentionally removed: the semaphore itself controls throughput,
-    # and pre-semaphore staggering was causing up to 9.6s of artificial idle waiting.
     semaphore = asyncio.Semaphore(4)
     
     async def sem_task(concept: AIConceptItem) -> ConceptContentAI:
@@ -324,15 +354,24 @@ async def replan_schedule(
     Output the JSON now:
     """
     
+    current_prompt = prompt
     for attempt in range(1, 6):
         temp = 0.1 * attempt
         try:
-            result_json = await _call_groq_json(prompt, system_prompt, temperature=temp, max_tokens=2000)
+            result_json = await _call_groq_json(current_prompt, system_prompt, temperature=temp, max_tokens=2000)
             validated = ReplanResponse.model_validate(result_json)
             return validated.schedule
         except Exception as e:
             logger.warning(f"AI replanning attempt {attempt} failed: {e}")
             if attempt == 5:
                 raise RuntimeError(f"Failed to generate replanned schedule after 5 attempts: {e}")
+            correction_note = f"""
+CORRECTION REQUIRED (Previous Attempt Failed):
+Your previous response failed validation with the following error:
+{e}
+
+Please fix this specific issue and return a valid JSON object with the "schedule" key.
+"""
+            current_prompt = f"{prompt}\n\n{correction_note}"
             await _handle_retry_sleep(attempt, e)
 

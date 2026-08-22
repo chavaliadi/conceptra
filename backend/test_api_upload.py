@@ -1,8 +1,10 @@
 import httpx
 import time
 import asyncio
+import pytest
 from uuid import UUID
 
+@pytest.mark.asyncio
 async def test_upload():
     print("--- Starting Backend API Upload & Propagation Verification ---")
     
@@ -10,10 +12,10 @@ async def test_upload():
     try:
         async with httpx.AsyncClient() as client:
             res = await client.get("http://localhost:8000/health")
-            print(f"Backend Health Check: {res.status_code}")
-    except Exception as e:
-        print(f"Backend health check failed: {e}. Please ensure uvicorn is running on port 8000.")
-        return
+            if res.status_code != 200:
+                pytest.skip("Backend server not healthy on port 8000")
+    except Exception:
+        pytest.skip("Backend server not running on port 8000")
 
     url = "http://localhost:8000/api/v2/plans/upload-syllabus"
     pdf_path = "/Users/srinivasch/Documents/Projects/Conceptra/test_syllabus.pdf"

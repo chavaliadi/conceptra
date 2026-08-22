@@ -57,6 +57,25 @@ def update_sm2(
     
     return repetitions, ease_factor, interval_days
 
+def calculate_next_review(
+    rating: int,
+    current_repetitions: int,
+    current_ease_factor: float,
+    current_interval_days: int
+) -> tuple[int, float, int, datetime]:
+    """
+    Computes next review state using the unified SM-2 algorithm in update_sm2.
+    Returns (new_repetitions, new_ease_factor, new_interval_days, next_review_at).
+    """
+    new_repetitions, new_ease_factor, new_interval_days = update_sm2(
+        repetitions=current_repetitions,
+        ease_factor=current_ease_factor,
+        interval_days=current_interval_days,
+        quality=rating
+    )
+    next_review_at = datetime.now(timezone.utc) + timedelta(days=new_interval_days)
+    return new_repetitions, new_ease_factor, new_interval_days, next_review_at
+
 def calculate_mastery_delta(quality: int) -> float:
     """
     Returns the change in mastery percentage based on SM-2 quality.

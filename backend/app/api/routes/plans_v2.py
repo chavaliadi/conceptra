@@ -1095,7 +1095,7 @@ async def review_concept_endpoint(
     if not progress_rec:
         raise HTTPException(status_code=404, detail="Progress record not found for this concept")
 
-    from app.services.srs import calculate_next_review
+    from app.services.scheduler import calculate_next_review
     new_rep, new_ef, new_interval, next_review_at = calculate_next_review(
         rating=rating,
         current_repetitions=progress_rec.repetitions,

@@ -56,6 +56,7 @@ export interface Plan {
   clerk_user_id?: string | null
   forked_from_id?: string | null
   status?: 'completed' | 'generating' | 'failed'
+  calendar_timetable?: { day: number; hours: number }[] | null
 }
 
 export interface LibraryPlanItem {
@@ -79,6 +80,7 @@ export interface CreatePlanRequest {
   topic: string
   exam_date: string
   hours_per_day: number
+  calendar_timetable?: { day: number; hours: number }[] | null
 }
 
 export interface CreatePlanResponse {

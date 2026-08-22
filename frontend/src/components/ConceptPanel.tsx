@@ -92,6 +92,9 @@ export default function ConceptPanel({
   onClose,
 }: ConceptPanelProps) {
   const { getToken } = useAuth()
+  const [content, setContent] = useState<ConceptContent | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string | null>(null)
   const [selectedOptions, setSelectedOptions] = useState<Record<number, number>>({})
   const [selectedConfidence, setSelectedConfidence] = useState<Record<number, number>>({})
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>({})

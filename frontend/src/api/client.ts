@@ -248,6 +248,10 @@ export function getAnalytics(planId: string, token?: string | null): Promise<Ana
       daily_velocity_needed: 0.43,
       projected_completion_date: new Date().toISOString().split('T')[0],
       status_assessment: 'On Track',
+      review_debt: 0,
+      average_mastery: 0.0,
+      average_retention: 0.0,
+      retention_decay_curve: [],
     })
   }
   const headers: Record<string, string> = {}

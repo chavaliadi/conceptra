@@ -47,11 +47,6 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
 
   if (!data) return null
 
-  // SVG parameters for radial progress circle
-  const radius = 36
-  const circumference = 2 * Math.PI * radius
-  const strokeDashoffset = circumference - (data.progress_percentage / 100) * circumference
-
   // SVG parameters for custom forgetting curve
   const curvePoints = data.retention_decay_curve || []
   const width = 600
@@ -207,7 +202,7 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
               {pathD && <path d={pathD} fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" />}
 
               {/* Labels & Markers at 2-day intervals */}
-              {curvePoints.map((p, idx) => (
+              {curvePoints.map((p) => (
                 (p.day % 2 === 0) && (
                   <g key={p.day}>
                     <circle cx={getX(p.day)} cy={getY(p.retention)} r="3" fill="#a78bfa" />
