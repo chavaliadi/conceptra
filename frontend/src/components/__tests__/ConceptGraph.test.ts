@@ -2,21 +2,6 @@ import { describe, it, expect } from 'vitest'
 import type { ConceptStatus, ConceptProgressDetail, Edge } from '../../types'
 
 // Replicating the core status resolution functions from ConceptGraph.tsx
-export function computeIsBlocked(
-  conceptId: string,
-  edges: Edge[],
-  statuses: Record<string, ConceptStatus>
-): boolean {
-  const prereqs = edges
-    .filter((e) => e.to_id === conceptId)
-    .map((e) => e.from_id)
-  if (prereqs.length === 0) return false
-  return prereqs.some((pid) => {
-    const pStatus = statuses[pid] ?? 'untouched'
-    return pStatus !== 'learned' && pStatus !== 'skipped'
-  })
-}
-
 export function computeIsForgotten(
   conceptId: string,
   progressDetails?: Record<string, ConceptProgressDetail>
@@ -27,6 +12,24 @@ export function computeIsForgotten(
   const isRetentionDecayed = detail.retention_pct < 50
   const isOverdue = detail.next_review_at ? new Date(detail.next_review_at) <= new Date() : false
   return isRetentionDecayed || isOverdue
+}
+
+export function computeIsBlocked(
+  conceptId: string,
+  edges: Edge[],
+  statuses: Record<string, ConceptStatus>,
+  progressDetails?: Record<string, ConceptProgressDetail>
+): boolean {
+  const prereqs = edges
+    .filter((e) => e.to_id === conceptId)
+    .map((e) => e.from_id)
+  if (prereqs.length === 0) return false
+  return prereqs.some((pid) => {
+    const pStatus = statuses[pid] ?? 'untouched'
+    if (pStatus !== 'learned' && pStatus !== 'skipped') return true
+    if (pStatus === 'learned' && computeIsForgotten(pid, progressDetails)) return true
+    return false
+  })
 }
 
 export function resolveNodeStatus(
@@ -44,7 +47,7 @@ export function resolveNodeStatus(
   } else if (baseStatus === 'learned') {
     return computeIsForgotten(conceptId, progressDetails) ? 'forgotten' : 'learned'
   } else {
-    return computeIsBlocked(conceptId, edges, statuses) ? 'blocked' : 'ready'
+    return computeIsBlocked(conceptId, edges, statuses, progressDetails) ? 'blocked' : 'ready'
   }
 }
 
@@ -68,12 +71,33 @@ describe('ConceptGraph Status Computation', () => {
       expect(computeIsBlocked('c2', sampleEdges, statuses2)).toBe(true)
     })
 
-    it('returns false if all prerequisites are learned or skipped', () => {
+    it('returns false if all prerequisites are learned (healthy) or skipped', () => {
       const statusesLearned: Record<string, ConceptStatus> = { c1: 'learned', c2: 'untouched' }
-      expect(computeIsBlocked('c2', sampleEdges, statusesLearned)).toBe(false)
+      const healthyDetails = {
+        c1: { status: 'learned' as const, mastery_pct: 90, retention_pct: 85, next_review_at: new Date(Date.now() + 86400000).toISOString() }
+      }
+      expect(computeIsBlocked('c2', sampleEdges, statusesLearned, healthyDetails)).toBe(false)
 
       const statusesSkipped: Record<string, ConceptStatus> = { c1: 'skipped', c2: 'untouched' }
       expect(computeIsBlocked('c2', sampleEdges, statusesSkipped)).toBe(false)
+    })
+
+    it('gates/blocks dependent concepts when prerequisite has active Review Debt (overdue or retention < 50%)', () => {
+      const statuses: Record<string, ConceptStatus> = { c1: 'learned', c2: 'untouched' }
+
+      // Case A: Prerequisite retention has decayed below 50%
+      const decayedPrereqDetails = {
+        c1: { status: 'learned' as const, mastery_pct: 80, retention_pct: 40, next_review_at: new Date(Date.now() + 86400000).toISOString() }
+      }
+      expect(computeIsBlocked('c2', sampleEdges, statuses, decayedPrereqDetails)).toBe(true)
+      expect(resolveNodeStatus('c2', sampleEdges, statuses, decayedPrereqDetails)).toBe('blocked')
+
+      // Case B: Prerequisite review is overdue
+      const overduePrereqDetails = {
+        c1: { status: 'learned' as const, mastery_pct: 85, retention_pct: 75, next_review_at: new Date(Date.now() - 86400000).toISOString() }
+      }
+      expect(computeIsBlocked('c2', sampleEdges, statuses, overduePrereqDetails)).toBe(true)
+      expect(resolveNodeStatus('c2', sampleEdges, statuses, overduePrereqDetails)).toBe('blocked')
     })
   })
 

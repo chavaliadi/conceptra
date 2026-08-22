@@ -94,18 +94,6 @@ export default function ConceptGraph({ plan, statuses, progressDetails, onSelect
             })
         })
 
-        // Helper: Check if concept is blocked by incomplete prerequisites
-        const isBlocked = (conceptId: string) => {
-            const prereqs = plan.graph.edges
-                .filter(e => e.to_id === conceptId)
-                .map(e => e.from_id)
-            if (prereqs.length === 0) return false
-            return prereqs.some(pid => {
-                const pStatus = statuses[pid] ?? 'untouched'
-                return pStatus !== 'learned' && pStatus !== 'skipped'
-            })
-        }
-
         // Helper: Check if concept is forgotten due to decay or overdue SM-2 review
         const isForgotten = (conceptId: string) => {
             const detail = progressDetails?.[conceptId]
@@ -114,6 +102,22 @@ export default function ConceptGraph({ plan, statuses, progressDetails, onSelect
             const isRetentionDecayed = detail.retention_pct < 50
             const isOverdue = detail.next_review_at ? new Date(detail.next_review_at) <= new Date() : false
             return isRetentionDecayed || isOverdue
+        }
+
+        // Helper: Check if concept is blocked by incomplete prerequisites OR prerequisite Review Debt
+        const isBlocked = (conceptId: string) => {
+            const prereqs = plan.graph.edges
+                .filter(e => e.to_id === conceptId)
+                .map(e => e.from_id)
+            if (prereqs.length === 0) return false
+            return prereqs.some(pid => {
+                const pStatus = statuses[pid] ?? 'untouched'
+                // If not learned or skipped, concept is blocked
+                if (pStatus !== 'learned' && pStatus !== 'skipped') return true
+                // If learned, but has active Review Debt (isForgotten), prerequisite decay gates dependent progress
+                if (pStatus === 'learned' && isForgotten(pid)) return true
+                return false
+            })
         }
 
         return plan.graph.concepts.map((concept) => {

@@ -93,8 +93,32 @@ async def get_concept_profile(
     difficulty_map = {"easy": 30.0, "medium": 60.0, "hard": 90.0}
     difficulty_score = difficulty_map.get(concept.difficulty.lower(), 60.0)
     
+    # Check if any prerequisite concept has unresolved Review Debt
+    prereq_stmt = select(Edge).where(Edge.plan_id == plan_id, Edge.to_concept_id == concept_id)
+    prereq_res = await db.execute(prereq_stmt)
+    prereq_edges = prereq_res.scalars().all()
+    has_prereq_debt = False
+    prereq_debt_name = ""
+    if prereq_edges:
+        prereq_ids = [edge.from_concept_id for edge in prereq_edges]
+        prereq_details_stmt = (
+            select(Concept, Progress)
+            .join(Progress, Progress.concept_id == Concept.id)
+            .where(Concept.id.in_(prereq_ids))
+        )
+        prereq_details_res = await db.execute(prereq_details_stmt)
+        for p_concept, p_prog in prereq_details_res:
+            p_ret = calculate_decayed_retention(p_prog.last_reviewed_at, p_prog.interval_days, p_prog.mastery_pct)
+            p_overdue = p_prog.next_review_at and p_prog.next_review_at <= datetime.now(timezone.utc)
+            if p_prog.status == "learned" and (p_ret < 50.0 or p_overdue):
+                has_prereq_debt = True
+                prereq_debt_name = p_concept.name
+                break
+
     # Map status & progress to recommended action
-    if progress.mastery_pct == 0:
+    if has_prereq_debt:
+        rec_action = f"Prerequisite '{prereq_debt_name}' has overdue Review Debt. Complete its review quiz to unblock this concept."
+    elif progress.mastery_pct == 0:
         rec_action = "Concept untouched. Start reading explanation and take the quiz"
     elif progress.mastery_pct < 40:
         rec_action = "Struggling. Review mistakes and practice with the AI Tutor"
