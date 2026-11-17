@@ -1115,7 +1115,7 @@ async def review_concept_endpoint(
                 detail=f"Concept is locked. {block_reason}"
             )
 
-    from app.services.scheduler import calculate_next_review
+    from app.services.scheduler import calculate_next_review, calculate_mastery_delta
     new_rep, new_ef, new_interval, next_review_at = calculate_next_review(
         rating=rating,
         current_repetitions=progress_rec.repetitions,
@@ -1123,15 +1123,25 @@ async def review_concept_endpoint(
         current_interval_days=progress_rec.interval_days
     )
 
+    delta = calculate_mastery_delta(rating)
+    new_mastery = max(0.0, min(100.0, progress_rec.mastery_pct + delta))
+    now_utc = datetime.now(timezone.utc)
+
     progress_rec.repetitions = new_rep
     progress_rec.ease_factor = new_ef
     progress_rec.interval_days = new_interval
     progress_rec.next_review_at = next_review_at
+    progress_rec.last_reviewed_at = now_utc
+    progress_rec.retention_pct = 100.0
+    progress_rec.mastery_pct = new_mastery
+    progress_rec.attempts_count += 1
     
-    if rating < 3:
+    if new_mastery >= 80.0:
+        progress_rec.status = "learned"
+    elif new_mastery < 40.0:
         progress_rec.status = "struggling"
     else:
-        progress_rec.status = "learned"
+        progress_rec.status = "learned" if rating >= 3 else "struggling"
 
     await db.commit()
     
@@ -1140,7 +1150,10 @@ async def review_concept_endpoint(
         "repetitions": progress_rec.repetitions,
         "ease_factor": progress_rec.ease_factor,
         "interval_days": progress_rec.interval_days,
-        "next_review_at": progress_rec.next_review_at
+        "next_review_at": progress_rec.next_review_at,
+        "mastery_pct": progress_rec.mastery_pct,
+        "retention_pct": progress_rec.retention_pct,
+        "last_reviewed_at": progress_rec.last_reviewed_at
     }
 
 @router.get("/{plan_id}/analytics", response_model=AnalyticsResponse)
