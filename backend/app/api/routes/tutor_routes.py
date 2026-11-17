@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes.deps import get_required_user
+from app.api.routes.deps import get_required_user, verify_plan_access
 from app.database import get_db
 from app.models.database import Concept, ConceptContent, Edge, Plan, Progress, QuizAttempt
 from app.models.learning_intelligence import StudentMistake, TutorChatMessage
@@ -72,9 +72,7 @@ async def get_concept_profile(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
 
     concept = await db.get(Concept, concept_id)
     if not concept:
@@ -135,9 +133,7 @@ async def get_chat_history(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
 
     stmt = (
         select(TutorChatMessage)
@@ -170,9 +166,7 @@ async def chat_with_tutor(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     # Load concept and explanation
     concept_stmt = select(Concept).where(Concept.id == concept_id).options(
@@ -339,9 +333,7 @@ async def grade_quiz_response(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     concept = await db.get(Concept, concept_id)
     if not concept:
@@ -456,9 +448,7 @@ async def flag_quiz_question(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
 
     question_text = payload.get("question_text")
     if not question_text:
@@ -542,9 +532,7 @@ async def get_weekly_report(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
-    clerk_uid = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
+    await verify_plan_access(plan, current_user, is_mutation=False, db=db)
 
     # Load all concepts for this plan
     concepts_stmt = select(Concept).where(Concept.plan_id == plan_id)

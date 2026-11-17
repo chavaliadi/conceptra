@@ -35,38 +35,11 @@ from app.services.dag_service import validate_and_sort_dag, generate_schedule
 from app.services import ai_service
 
 from app.services.cache_service import get_plan_cache, set_plan_cache
-from app.api.routes.deps import get_current_user, get_required_user
+from app.api.routes.deps import get_current_user, get_required_user, verify_plan_access
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/plans", tags=["plans_v2"])
-
-async def verify_plan_access(
-    plan: Plan,
-    current_user: dict | None,
-    is_mutation: bool = False,
-    db: AsyncSession | None = None
-) -> None:
-    """
-    Unified authorization and ownership check for plans.
-    Fixes Fix 4 (protecting GET endpoints) and Fix 5 (auto-claiming unclaimed plans for the first authenticated caller).
-    """
-    if plan.clerk_user_id is not None:
-        if current_user and plan.clerk_user_id == current_user.get("sub"):
-            return
-        if not is_mutation and plan.is_public:
-            return
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required to access this private plan")
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
-    else:
-        # Unclaimed plan (clerk_user_id is None)
-        if current_user and current_user.get("sub"):
-            plan.clerk_user_id = current_user["sub"]
-            if db:
-                await db.flush()
-            logger.info(f"Auto-claimed unclaimed plan {plan.id} for user {current_user['sub']}")
-            return
 
 async def publish_progress(plan_id: UUID, stage: str, status: str = "generating", **kwargs):
     from app.services.cache_service import redis_client
