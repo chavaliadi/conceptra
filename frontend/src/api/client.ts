@@ -16,10 +16,13 @@ import type {
 } from '../types'
 
 
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`
   const { headers, ...restOptions } = options || {}
   const isMultipart = restOptions.body instanceof FormData
-  const response = await fetch(path, {
+  const response = await fetch(url, {
     headers: {
       ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
       ...headers,
@@ -66,7 +69,8 @@ export async function uploadSyllabus(
   formData.append('exam_date', examDate)
   formData.append('hours_per_day', String(hoursPerDay))
 
-  const url = isV2 ? '/api/v2/plans/upload-syllabus' : '/api/plans/upload-syllabus'
+  const rawUrl = isV2 ? '/api/v2/plans/upload-syllabus' : '/api/plans/upload-syllabus'
+  const url = rawUrl.startsWith('http') ? rawUrl : `${BASE_URL}${rawUrl}`
   const headers: Record<string, string> = {}
   if (token) {
     headers['Authorization'] = `Bearer ${token}`

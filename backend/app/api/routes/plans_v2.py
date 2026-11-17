@@ -35,38 +35,11 @@ from app.services.dag_service import validate_and_sort_dag, generate_schedule
 from app.services import ai_service
 
 from app.services.cache_service import get_plan_cache, set_plan_cache
-from app.api.routes.deps import get_current_user, get_required_user
+from app.api.routes.deps import get_current_user, get_required_user, verify_plan_access
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/plans", tags=["plans_v2"])
-
-async def verify_plan_access(
-    plan: Plan,
-    current_user: dict | None,
-    is_mutation: bool = False,
-    db: AsyncSession | None = None
-) -> None:
-    """
-    Unified authorization and ownership check for plans.
-    Fixes Fix 4 (protecting GET endpoints) and Fix 5 (auto-claiming unclaimed plans for the first authenticated caller).
-    """
-    if plan.clerk_user_id is not None:
-        if current_user and plan.clerk_user_id == current_user.get("sub"):
-            return
-        if not is_mutation and plan.is_public:
-            return
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required to access this private plan")
-        raise HTTPException(status_code=403, detail="Not authorized to access this plan")
-    else:
-        # Unclaimed plan (clerk_user_id is None)
-        if current_user and current_user.get("sub"):
-            plan.clerk_user_id = current_user["sub"]
-            if db:
-                await db.flush()
-            logger.info(f"Auto-claimed unclaimed plan {plan.id} for user {current_user['sub']}")
-            return
 
 async def publish_progress(plan_id: UUID, stage: str, status: str = "generating", **kwargs):
     from app.services.cache_service import redis_client
@@ -1115,7 +1088,7 @@ async def review_concept_endpoint(
                 detail=f"Concept is locked. {block_reason}"
             )
 
-    from app.services.scheduler import calculate_next_review
+    from app.services.scheduler import calculate_next_review, calculate_mastery_delta
     new_rep, new_ef, new_interval, next_review_at = calculate_next_review(
         rating=rating,
         current_repetitions=progress_rec.repetitions,
@@ -1123,15 +1096,25 @@ async def review_concept_endpoint(
         current_interval_days=progress_rec.interval_days
     )
 
+    delta = calculate_mastery_delta(rating)
+    new_mastery = max(0.0, min(100.0, progress_rec.mastery_pct + delta))
+    now_utc = datetime.now(timezone.utc)
+
     progress_rec.repetitions = new_rep
     progress_rec.ease_factor = new_ef
     progress_rec.interval_days = new_interval
     progress_rec.next_review_at = next_review_at
+    progress_rec.last_reviewed_at = now_utc
+    progress_rec.retention_pct = 100.0
+    progress_rec.mastery_pct = new_mastery
+    progress_rec.attempts_count += 1
     
-    if rating < 3:
+    if new_mastery >= 80.0:
+        progress_rec.status = "learned"
+    elif new_mastery < 40.0:
         progress_rec.status = "struggling"
     else:
-        progress_rec.status = "learned"
+        progress_rec.status = "learned" if rating >= 3 else "struggling"
 
     await db.commit()
     
@@ -1140,7 +1123,10 @@ async def review_concept_endpoint(
         "repetitions": progress_rec.repetitions,
         "ease_factor": progress_rec.ease_factor,
         "interval_days": progress_rec.interval_days,
-        "next_review_at": progress_rec.next_review_at
+        "next_review_at": progress_rec.next_review_at,
+        "mastery_pct": progress_rec.mastery_pct,
+        "retention_pct": progress_rec.retention_pct,
+        "last_reviewed_at": progress_rec.last_reviewed_at
     }
 
 @router.get("/{plan_id}/analytics", response_model=AnalyticsResponse)

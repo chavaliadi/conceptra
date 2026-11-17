@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.routes.deps import get_current_user, get_required_user
+from app.api.routes.deps import get_current_user, get_required_user, verify_plan_access
 from app.database import get_db
 from app.models.database import (
     Concept,
@@ -55,8 +55,9 @@ async def publish_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
+    await verify_plan_access(plan, current_user, is_mutation=True, db=db)
     clerk_uid: str = current_user.get("sub", "")
-    if plan.clerk_user_id and plan.clerk_user_id != clerk_uid:
+    if plan.clerk_user_id != clerk_uid:
         raise HTTPException(status_code=403, detail="Not authorized to publish this plan")
 
     plan.is_public = not plan.is_public

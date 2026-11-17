@@ -194,10 +194,17 @@ def generate_study_guide_pdf(plan) -> bytes:
                 concept_elements.append(Paragraph("<b>Practice Quiz:</b>", meta_label_style))
                 for idx, q in enumerate(content.quiz, 1):
                     q_text = f"Q{idx}. {q.get('question', '')}"
-                    if q.get("type") == "mcq" and q.get("options"):
-                        opts = ", ".join(f"({chr(97 + i)}) {opt}" for i, opt in enumerate(q.get("options", [])))
+                    options = q.get("options", [])
+                    if q.get("type") == "mcq" and options:
+                        opts = ", ".join(f"({chr(97 + i)}) {opt}" for i, opt in enumerate(options))
                         q_text += f"<br/><i>Options: {opts}</i>"
-                    q_text += f"<br/><b>Correct Answer:</b> {q.get('answer', '')}"
+                    
+                    correct_idx = q.get("correct_option_index")
+                    if correct_idx is not None and 0 <= correct_idx < len(options):
+                        correct_answer_str = f"({chr(97 + correct_idx)}) {options[correct_idx]}"
+                    else:
+                        correct_answer_str = q.get("answer", "N/A")
+                    q_text += f"<br/><b>Correct Answer:</b> {correct_answer_str}"
                     concept_elements.append(Paragraph(q_text, body_style))
                     concept_elements.append(Spacer(1, 4))
             

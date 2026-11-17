@@ -17,33 +17,35 @@ PLATFORM_TEMPLATES: Dict[str, str] = {
     "microsoft learn": "https://learn.microsoft.com/en-us/search/?terms={query}",
 }
 
-def resolve_resource_url(resource_type: str, platform: str, query: str) -> str:
+def resolve_resource_url(resource_type: str, platform: str | None, query: str | None) -> str:
     """
     Two-tier resolution server-side:
     - Tier 1: Match against known platforms in registry.
     - Tier 2: Safe fallback based on type (video -> YouTube, article/docs -> Google search).
     """
-    platform_clean = platform.strip().lower()
-    query_encoded = urllib.parse.quote_plus(query.strip())
+    platform_clean = (platform or "").strip().lower()
+    query_clean = (query or "").strip()
+    query_encoded = urllib.parse.quote_plus(query_clean)
     
     # Tier 1 Lookup
-    if platform_clean in PLATFORM_TEMPLATES:
+    if platform_clean and platform_clean in PLATFORM_TEMPLATES:
         template = PLATFORM_TEMPLATES[platform_clean]
         if platform_clean == "wikipedia":
             # For Wikipedia, format queries as a clean wiki link by replacing space with underscore
-            wiki_query = query.strip().replace(" ", "_")
+            wiki_query = query_clean.replace(" ", "_")
             wiki_query_encoded = urllib.parse.quote(wiki_query)
             return template.format(wiki_query=wiki_query_encoded)
         return template.format(query=query_encoded)
         
     # Tier 2 Fallback
     logger.warning(f"[platform_registry] Tier-2 fallback: platform='{platform}', type='{resource_type}', query='{query}'")
+    fallback_query = f"{platform or ''} {query_clean}".strip()
     if resource_type == "video":
         # YouTube fallback search query
-        return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(platform + ' ' + query)}"
+        return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(fallback_query)}"
     
     # Generic Google search fallback for docs/articles
-    return f"https://www.google.com/search?q={urllib.parse.quote_plus(platform + ' ' + query)}"
+    return f"https://www.google.com/search?q={urllib.parse.quote_plus(fallback_query)}"
 
 
 SUBJECT_PLATFORM_MAP: Dict[str, List[str]] = {

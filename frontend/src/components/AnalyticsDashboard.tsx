@@ -11,7 +11,7 @@ interface AnalyticsDashboardProps {
 const statusBadgeStyles = {
   'On Track': 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
   'Behind': 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
-  'Critical': 'bg-rose-500/10 text-rose-450 border border-rose-500/20',
+  'Critical': 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
 }
 
 export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashboardProps) {
@@ -111,8 +111,8 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
             </div>
             <p className="text-[10px] text-slate-500">to complete by exam date</p>
           </div>
-          <div className="border-t border-slate-850/80 pt-2 mt-3 flex justify-between items-center text-[10px]">
-            <span className="text-slate-550">Days Remaining:</span>
+          <div className="border-t border-slate-800/80 pt-2 mt-3 flex justify-between items-center text-[10px]">
+            <span className="text-slate-500">Days Remaining:</span>
             <span className="text-slate-200 font-semibold">{data.days_left} days</span>
           </div>
         </div>
@@ -163,8 +163,8 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
               </span>
             )}
           </div>
-          <div className="border-t border-slate-850/80 pt-2 mt-3 flex justify-between items-center text-[10px]">
-            <span className="text-slate-550">Average Concept Mastery:</span>
+          <div className="border-t border-slate-800/80 pt-2 mt-3 flex justify-between items-center text-[10px]">
+            <span className="text-slate-500">Average Concept Mastery:</span>
             <span className="text-slate-200 font-semibold">{data.average_mastery}%</span>
           </div>
         </div>
@@ -175,7 +175,7 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
       <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-6 shadow-lg">
         <div className="mb-4">
           <h3 className="text-sm font-semibold text-slate-200">System Retention Decay Curve</h3>
-          <p className="text-xs text-slate-450 mt-0.5">Projected retention index over the next 14 days if no review occurs (Ebbinghaus Forgetting Curve model).</p>
+          <p className="text-xs text-slate-400 mt-0.5">Projected retention index over the next 14 days if no review occurs (Ebbinghaus Forgetting Curve model).</p>
         </div>
 
         <div className="relative w-full overflow-hidden">
@@ -193,7 +193,7 @@ export default function AnalyticsDashboard({ planId, statuses }: AnalyticsDashbo
               <text x={getX(14) - 90} y={getY(80) - 4} className="fill-slate-600 text-[8px] font-medium">80% Mastery Threshold</text>
               
               <line x1={getX(0)} y1={getY(50)} x2={getX(14)} y2={getY(50)} stroke="#1e293b" strokeDasharray="3 3" />
-              <text x={getX(14) - 90} y={getY(50) - 4} className="fill-slate-650 text-[8px] font-medium">50% Decay Limit</text>
+              <text x={getX(14) - 90} y={getY(50) - 4} className="fill-slate-600 text-[8px] font-medium">50% Decay Limit</text>
 
               {/* Shaded area under graph line */}
               {areaD && <path d={areaD} fill="url(#chartGradient)" />}
