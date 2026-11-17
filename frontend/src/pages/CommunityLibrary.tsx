@@ -32,7 +32,10 @@ export default function CommunityLibrary() {
 
   useEffect(() => {
     if (!isLoaded) return
-    fetchLibrary()
+    const timer = setTimeout(() => {
+      fetchLibrary()
+    }, 300)
+    return () => clearTimeout(timer)
   }, [isLoaded, sortOrder, searchQuery])
 
   const handleFork = async (e: React.MouseEvent, planId: string) => {

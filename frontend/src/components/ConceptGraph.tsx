@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import ReactFlow, {
     Controls,
     Background,
@@ -193,7 +193,7 @@ export default function ConceptGraph({ plan, statuses, progressDetails, onSelect
     const [reactFlowEdges, setEdges] = useEdgesState(edges)
 
     // Sync state when props change
-    useMemo(() => {
+    useEffect(() => {
         setNodes(nodes)
         setEdges(edges)
     }, [nodes, edges, setNodes, setEdges])
